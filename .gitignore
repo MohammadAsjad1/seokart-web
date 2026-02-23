@@ -1,0 +1,12 @@
+seokart_web_node/.env
+seokart_web_node/node_modules
+seokart_web_node/dist
+seokart_web_node/package-lock.json
+seokart_web_node/logs
+
+seokart_web_frontend/.env.local
+seokart_web_frontend/node_modules
+seokart_web_frontend/dist
+seokart_web_frontend/package-lock.json
+seokart_web_frontend/.next
+seokart_web_frontend/build
