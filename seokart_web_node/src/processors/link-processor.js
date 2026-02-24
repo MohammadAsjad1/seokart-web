@@ -2,7 +2,7 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const { URL } = require("url");
 const logger = require("../config/logger");
-const pLimit = require("p-limit");
+const pLimit = require("p-limit").default;
 
 class LinkProcessor {
   constructor() {

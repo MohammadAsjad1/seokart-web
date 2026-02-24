@@ -142,16 +142,13 @@ class WebpageService {
         isExistingCore
       );
 
-      // Update core reference if new scores were created.
-      // Only write seoScore/seoGrade to core when slow analysis is done, so the UI never shows
-      // a preliminary score that later drops (better UX).
+      // Update core reference if new scores were created
       if (results.scores && !webpageCore.scoresId) {
-        const coreUpdate = { scoresId: results.scores._id };
-        if (webpageData.core?.slowAnalysisCompleted) {
-          coreUpdate.seoScore = results.scores.seoScore;
-          coreUpdate.seoGrade = results.scores.seoGrade;
-        }
-        await WebpageCore.findByIdAndUpdate(webpageCore._id, coreUpdate);
+        await WebpageCore.findByIdAndUpdate(webpageCore._id, {
+          scoresId: results.scores._id,
+          seoScore: results.scores.seoScore,
+          seoGrade: results.scores.seoGrade,
+        });
       }
 
       logger.debug(

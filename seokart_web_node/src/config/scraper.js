@@ -1,7 +1,7 @@
 module.exports = {
   concurrency: {
     fast_scraper: parseInt(process.env.FAST_SCRAPER_CONCURRENCY) || 15,
-    slow_analyzer: parseInt(process.env.SLOW_ANALYZER_CONCURRENCY) || 8,
+    slow_analyzer: parseInt(process.env.SLOW_ANALYZER_CONCURRENCY) || 12,
     sitemap_processing: parseInt(process.env.SITEMAP_CONCURRENCY) || 5,
     max_users: parseInt(process.env.MAX_CONCURRENT_USERS) || 10
   },
@@ -18,7 +18,7 @@ module.exports = {
     fast_scrape: 25,
     slow_analysis: 15,
     duplicate_check: 50,
-    link_validation: 30
+    link_validation: 40
   },
 
   rate_limits: {

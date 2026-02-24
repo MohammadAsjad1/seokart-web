@@ -286,16 +286,16 @@ const webCrawler = async ({
       });
     
       // Update user plan usage
-      try {
-        const userPlan = await UserPlan.findOne({ userId });
-        if (userPlan && result.totalUrls > 0) {
-          console.log("Updating user plan usage: +", result.totalUrls, "pages for userId", userId);
-          await userPlan.incrementUsage("webCrawler", "pages", result.totalUrls);
-          logger.info(`User plan updated: +${result.totalUrls} pages for userId ${userId}`, userId);
-        }
-      } catch (planErr) {
-        logger.error("Failed to update user plan usage after crawl", planErr, userId);
-      }
+      // try {
+      //   const userPlan = await UserPlan.findOne({ userId });
+      //   if (userPlan && result.totalUrls > 0) {
+      //     console.log("Updating user plan usage: +", result.totalUrls, "pages for userId", userId);
+      //     await userPlan.incrementUsage("webCrawler", "pages", result.totalUrls);
+      //     logger.info(`User plan updated: +${result.totalUrls} pages for userId ${userId}`, userId);
+      //   }
+      // } catch (planErr) {
+      //   logger.error("Failed to update user plan usage after crawl", planErr, userId);
+      // }
     
       // Socket Emission for Completion
       emitToUser(userId, "crawl_completed", {
@@ -587,13 +587,13 @@ const handleSingleUrlCrawl = async (req, res) => {
     );
 
     // Calculate SEO scores using the new system
-    console.log("Calculating SEO scores...");
-    const scoreResult = scoreCalculator.calculateNewSystemScores({
-      ...scrapedData,
-      grammarSpelling: grammarSpellIssues,
-      duplicates: {},
-      brokenLinks: [],
-    });
+    // console.log("Calculating SEO scores...");
+    // const scoreResult = scoreCalculator.calculateNewSystemScores({
+    //   ...scrapedData,
+    //   grammarSpelling: grammarSpellIssues,
+    //   duplicates: {},
+    //   brokenLinks: [],
+    // });
 
     // Process links and get broken links
     console.log("Processing links...");

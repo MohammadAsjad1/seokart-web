@@ -97,7 +97,6 @@ const getPaginatedWebpages = async (req, res) => {
           $gte: filterObj.seoScoreRange.min || 0,
           $lte: filterObj.seoScoreRange.max || 100,
         };
-        query.slowAnalysisCompleted = true; // only filter by final score, not pending
       }
 
       if (filterObj.isProcessed !== undefined) {
@@ -148,7 +147,6 @@ const getPaginatedWebpages = async (req, res) => {
       hasError: 1,
       seoScore: 1,
       seoGrade: 1,
-      slowAnalysisCompleted: 1,
       hasErrors: 1,
       isProcessed: 1,
       createdAt: 1,
@@ -273,18 +271,10 @@ const getPaginatedWebpages = async (req, res) => {
 
     const errorCounts = await getErrorCountsSummary(query);
 
-    // Don't expose preliminary score: when slow analysis isn't done, return null so UI can show "Analyzing..."
-    const webpagesForClient = populatedWebpages.map((w) => {
-      if (w.slowAnalysisCompleted !== true) {
-        return { ...w, seoScore: null, seoGrade: null };
-      }
-      return w;
-    });
-
     return res.status(200).json({
       success: true,
       data: {
-        webpages: webpagesForClient,
+        webpages: populatedWebpages,
         pagination: {
           total,
           page: parseInt(page),
@@ -1242,11 +1232,6 @@ const getWebpageById = async (req, res) => {
       if (scores) result.scores = scores;
     }
 
-    if (result.slowAnalysisCompleted !== true) {
-      result.seoScore = null;
-      result.seoGrade = null;
-    }
-
     return res.status(200).json({
       success: true,
       data: result,
@@ -1412,7 +1397,6 @@ const searchWebpages = async (req, res) => {
       lastCrawled: 1,
       seoScore: 1,
       seoGrade: 1,
-      slowAnalysisCompleted: 1,
       hasErrors: 1,
       isProcessed: 1,
     })
@@ -1430,16 +1414,10 @@ const searchWebpages = async (req, res) => {
         ? webpages[webpages.length - 1]._id
         : null;
 
-    const webpagesForClient = webpages.map((w) =>
-      w.slowAnalysisCompleted !== true
-        ? { ...w, seoScore: null, seoGrade: null }
-        : w
-    );
-
     return res.status(200).json({
       success: true,
       data: {
-        webpages: webpagesForClient,
+        webpages,
         pagination: {
           limit: parseInt(limit),
           hasNextPage,
