@@ -3,6 +3,7 @@ const cheerio = require("cheerio");
 const { URL } = require("url");
 const logger = require("../config/logger");
 const pLimit = require("p-limit").default;
+const config = require("../config/scraper");
 
 class LinkProcessor {
   constructor() {
@@ -13,7 +14,7 @@ class LinkProcessor {
       redirectLinksFound: 0,
       errors: 0,
     };
-    this.timeout = 5000;
+    this.timeout = config.timeouts?.link_check ?? 3000;
     this.maxRedirects = 5;
     this.domainCache = new Map();
     this.DOMAIN_CACHE_TTL = 60000;
@@ -23,11 +24,9 @@ class LinkProcessor {
     try {
       const pageUrl = webpage.pageUrl || webpage.url;
       const websiteUrl = webpage.websiteUrl;
-      
+
       logger.info(`🔍 Starting link validation for: ${pageUrl}`);
-      // console.time("extractLinksFromWebpage");
-      const links = await this.extractLinksFromWebpage(webpage, pageUrl);
-      // console.timeEnd("extractLinksFromWebpage");
+      let links = await this.extractLinksFromWebpage(webpage, pageUrl);
       if (!links || links.length === 0) {
         logger.warn(`⚠️  No links found on: ${pageUrl}`);
         return {
@@ -37,8 +36,14 @@ class LinkProcessor {
         };
       }
 
-      logger.info(`📊 Found ${links.length} unique links to validate on: ${pageUrl}`);
-      // console.time("validateLinksWithRateLimit");
+      // const maxPerPage = config.performance?.link_validation_max_links_per_page;
+      // if (maxPerPage && maxPerPage > 0 && links.length > maxPerPage) {
+      //   links = links.slice(0, maxPerPage);
+      //   logger.info(`📊 Capping to ${maxPerPage} links per page (had more) for: ${pageUrl}`);
+      // } else {
+      //   logger.info(`📊 Found ${links.length} unique links to validate on: ${pageUrl}`);
+      // }
+
       const results = await this.validateLinksWithRateLimit(
         links,
         pageUrl,
@@ -152,7 +157,8 @@ class LinkProcessor {
     const externalBrokenLinks = [];
     const redirectLinks = [];
 
-    const limit = pLimit(20); // increase to 20
+    const concurrency = config.concurrency?.link_checks_per_page ?? 40;
+    const limit = pLimit(concurrency);
 
     await Promise.all(
       links.map(link =>
@@ -278,7 +284,7 @@ class LinkProcessor {
     }
 
     const reqOpts = {
-      timeout: 3000,
+      timeout: this.timeout,
       maxRedirects: 0,
       validateStatus: () => true,
       headers: {

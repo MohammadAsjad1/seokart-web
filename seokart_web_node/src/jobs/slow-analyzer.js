@@ -168,8 +168,13 @@ class SlowAnalyzerJob {
   async detectDuplicates(webpages, userId, userActivityId, websiteUrl) {
     logger.info("Phase 1: Detecting duplicates", userId);
 
-    const batchSize = config.batch_sizes.duplicate_check || 20;
+    const batchSize = config.batch_sizes.duplicate_check || 30;
     const totalBatches = Math.ceil(webpages.length / batchSize);
+    const batchDelay = config.batch_delays?.duplicate_check ?? 100;
+
+    // Load all webpages once so we don't query DB on every batch (huge win for 2500+ pages)
+    const allWebpages = await this.duplicateProcessor.loadAllWebpagesForSite(userId, websiteUrl);
+    logger.info(`Loaded ${allWebpages.length} site webpages once for duplicate check`, userId);
 
     for (let i = 0; i < webpages.length; i += batchSize) {
       const batch = webpages.slice(i, i + batchSize);
@@ -183,37 +188,30 @@ class SlowAnalyzerJob {
       const duplicateResults = await this.duplicateProcessor.findDuplicates(
         batch,
         userId,
-        websiteUrl
+        websiteUrl,
+        allWebpages
       );
 
-      for (const webpage of batch) {
+      // Parallelize duplicate updates for this batch
+      const updatePromises = batch.map(async (webpage) => {
         const duplicates = duplicateResults.get(webpage._id.toString());
         if (duplicates) {
-          const duplicateScore = this.calculateDuplicateScore(duplicates);
-
-          await this.updateWebpageWithDuplicates(
-            webpage._id,
-            duplicates,
-            duplicateScore
-          );
-
           this.stats.duplicatesFound +=
             duplicates.titleDuplicates.length +
             duplicates.descriptionDuplicates.length +
             duplicates.contentDuplicates.length;
+          const duplicateScore = this.calculateDuplicateScore(duplicates);
+          await this.updateWebpageWithDuplicates(webpage._id, duplicates, duplicateScore);
         } else {
-          await this.updateWebpageWithDuplicates(
-            webpage._id,
-            {
-              titleDuplicates: [],
-              descriptionDuplicates: [],
-              contentDuplicates: [],
-            },
-            100
-          );
+          await this.updateWebpageWithDuplicates(webpage._id, {
+            titleDuplicates: [],
+            descriptionDuplicates: [],
+            contentDuplicates: [],
+          }, 100);
         }
         this.stats.analyzed++;
-      }
+      });
+      await Promise.all(updatePromises);
 
       try {
         if (
@@ -238,7 +236,7 @@ class SlowAnalyzerJob {
       }
 
       if (i + batchSize < webpages.length) {
-        await this.sleep(100);
+        await this.sleep(batchDelay);
       }
     }
   }
@@ -246,8 +244,9 @@ class SlowAnalyzerJob {
   async validateLinks(webpages, userId, userActivityId) {
     logger.info("Phase 2: Validating links", userId);
 
-    const batchSize = config.batch_sizes.link_validation || 10;
+    const batchSize = config.batch_sizes.link_validation || 30;
     const totalBatches = Math.ceil(webpages.length / batchSize);
+    const batchDelay = config.batch_delays?.link_validation ?? 200;
     let processedPages = 0;
 
     for (let i = 0; i < webpages.length; i += batchSize) {
@@ -259,7 +258,7 @@ class SlowAnalyzerJob {
         userId
       );
 
-      const concurrency = config.concurrency.slow_analyzer || 2;
+      const concurrency = config.concurrency.link_validation || config.concurrency.slow_analyzer || 5;
       const limit = this.createConcurrencyLimiter(concurrency);
 
       const promises = batch.map((webpage) =>
@@ -385,7 +384,7 @@ class SlowAnalyzerJob {
       }
 
       if (i + batchSize < webpages.length) {
-        await this.sleep(200);
+        await this.sleep(batchDelay);
       }
     }
   }
@@ -449,157 +448,97 @@ class SlowAnalyzerJob {
   async recalculateScores(webpages, userId, userActivityId) {
     logger.info("Phase 3: Recalculating scores", userId);
 
-    const batchSize = 20;
+    const batchSize = config.batch_sizes.score_recalc || 30;
     const totalBatches = Math.ceil(webpages.length / batchSize);
+    const concurrency = Math.min(config.concurrency.slow_analyzer || 8, batchSize);
+    const limit = this.createConcurrencyLimiter(concurrency);
     let processedPages = 0;
+
+    const processOne = async (webpage) => {
+      try {
+        const completeWebpage = await this.getCompleteWebpageData(webpage._id);
+        if (!completeWebpage) {
+          logger.warn(`Could not load complete data for ${webpage.pageUrl}`, userId);
+          return 0;
+        }
+
+        if (completeWebpage.technicalId) {
+          const freshTechnical = await WebpageTechnical.findById(completeWebpage.technicalId).lean();
+          if (freshTechnical) {
+            completeWebpage.technical = freshTechnical;
+            completeWebpage.links = freshTechnical.links;
+            completeWebpage.redirectLinks = freshTechnical.redirectLinks || [];
+            completeWebpage.internalBrokenLinks = freshTechnical.internalBrokenLinks || [];
+            completeWebpage.externalBrokenLinks = freshTechnical.externalBrokenLinks || [];
+            completeWebpage.httpLinks = freshTechnical.httpLinks || [];
+          }
+        }
+
+        const scoreResult = this.scoreCalculator.calculateNewSystemScores(completeWebpage);
+        const newScores = scoreResult.scores;
+        const totalScore = scoreResult.totalScore;
+        const grade = scoreResult.grade;
+
+        await WebpageCore.findByIdAndUpdate(webpage._id, {
+          seoScore: Math.round(totalScore * 10) / 10,
+          seoGrade: grade,
+          slowAnalysisCompleted: true,
+          updatedAt: new Date(),
+        });
+
+        if (completeWebpage.scoresId) {
+          await WebpageScores.findByIdAndUpdate(completeWebpage.scoresId, {
+            seoScore: Math.round(totalScore * 10) / 10,
+            seoGrade: grade,
+            scores: {
+              titleNotMissing: newScores.titleNotMissing,
+              titleRightLength: newScores.titleRightLength,
+              titleNotDuplicated: newScores.titleNotDuplicated,
+              metaDescNotMissing: newScores.metaDescNotMissing,
+              metaDescRightLength: newScores.metaDescRightLength,
+              metaDescNotDuplicated: newScores.metaDescNotDuplicated,
+              contentNotTooShort: newScores.contentNotTooShort,
+              noMultipleTitles: newScores.noMultipleTitles,
+              oneH1Only: newScores.oneH1Only,
+              headingsProperOrder: newScores.headingsProperOrder,
+              urlNotTooLong: newScores.urlNotTooLong,
+              canonicalTagExists: newScores.canonicalTagExists,
+              noRedirectLinks: newScores.noRedirectLinks,
+              noHttpLinks: newScores.noHttpLinks,
+              noInternalBrokenLinks: newScores.noInternalBrokenLinks,
+              noExternalBrokenLinks: newScores.noExternalBrokenLinks,
+              mobileResponsive: newScores.mobileResponsive,
+              imagesHaveAltText: newScores.imagesHaveAltText,
+              noGrammarSpellingErrors: newScores.noGrammarSpellingErrors,
+              contentNotDuplicated: newScores.contentNotDuplicated,
+            },
+            lastCalculated: new Date(),
+          });
+        }
+
+        if (completeWebpage.analysisId) {
+          await WebpageAnalysis.findByIdAndUpdate(completeWebpage.analysisId, { slowAnalysisCompleted: true });
+        }
+
+        logger.debug(`Scores updated for ${webpage.pageUrl}`, userId);
+        return 1;
+      } catch (error) {
+        logger.error(`Failed to recalculate scores for ${webpage.pageUrl}: ${error.message}`, userId);
+        return 0;
+      }
+    };
 
     for (let i = 0; i < webpages.length; i += batchSize) {
       const batch = webpages.slice(i, i + batchSize);
       const batchNumber = Math.floor(i / batchSize) + 1;
 
-      for (const webpage of batch) {
-        try {
-          const completeWebpage = await this.getCompleteWebpageData(
-            webpage._id
-          );
+      const results = await Promise.all(batch.map((webpage) => limit(() => processOne(webpage))));
+      processedPages += results.reduce((a, b) => a + b, 0);
 
-          if (!completeWebpage) {
-            logger.warn(
-              `Could not load complete data for ${webpage.pageUrl}`,
-              userId
-            );
-            continue;
-          }
-
-          if (completeWebpage.technicalId) {
-            const freshTechnical = await WebpageTechnical.findById(
-              completeWebpage.technicalId
-            ).lean();
-            if (freshTechnical) {
-              completeWebpage.technical = freshTechnical;
-              completeWebpage.links = freshTechnical.links;
-              completeWebpage.redirectLinks =
-                freshTechnical.redirectLinks || [];
-              completeWebpage.internalBrokenLinks =
-                freshTechnical.internalBrokenLinks || [];
-              completeWebpage.externalBrokenLinks =
-                freshTechnical.externalBrokenLinks || [];
-              completeWebpage.httpLinks = freshTechnical.httpLinks || [];
-            }
-          }
-
-          logger.info(
-            `BEFORE: Page ${webpage.pageUrl} - SEO Score: ${
-              webpage.seoScore || 0
-            }`,
-            userId
-          );
-          logger.info(
-            `Internal Broken Links: ${
-              completeWebpage.internalBrokenLinks?.length || 0
-            }, ` +
-              `External Broken Links: ${
-                completeWebpage.externalBrokenLinks?.length || 0
-              }`,
-            userId
-          );
-
-          const scoreResult =
-            this.scoreCalculator.calculateNewSystemScores(completeWebpage);
-          const newScores = scoreResult.scores;
-          const totalScore = scoreResult.totalScore;
-          const grade = scoreResult.grade;
-
-          logger.info(
-            `AFTER: Page ${webpage.pageUrl} - New SEO Score: ${totalScore}`,
-            userId
-          );
-          logger.info(`Score breakdown:`, userId);
-          logger.info(
-            `- Title Not Missing: ${newScores.titleNotMissing}`,
-            userId
-          );
-          logger.info(
-            `- No Internal Broken Links: ${newScores.noInternalBrokenLinks}`,
-            userId
-          );
-          logger.info(
-            `- No External Broken Links: ${newScores.noExternalBrokenLinks}`,
-            userId
-          );
-          logger.info(
-            `- Title Not Duplicated: ${newScores.titleNotDuplicated}`,
-            userId
-          );
-
-          await WebpageCore.findByIdAndUpdate(webpage._id, {
-            seoScore: Math.round(totalScore * 10) / 10,
-            seoGrade: grade,
-            slowAnalysisCompleted: true,
-            updatedAt: new Date(),
-          });
-
-          if (completeWebpage.scoresId) {
-            await WebpageScores.findByIdAndUpdate(completeWebpage.scoresId, {
-              seoScore: Math.round(totalScore * 10) / 10,
-              seoGrade: grade,
-              scores: {
-                titleNotMissing: newScores.titleNotMissing,
-                titleRightLength: newScores.titleRightLength,
-                titleNotDuplicated: newScores.titleNotDuplicated,
-                metaDescNotMissing: newScores.metaDescNotMissing,
-                metaDescRightLength: newScores.metaDescRightLength,
-                metaDescNotDuplicated: newScores.metaDescNotDuplicated,
-                contentNotTooShort: newScores.contentNotTooShort,
-                noMultipleTitles: newScores.noMultipleTitles,
-                oneH1Only: newScores.oneH1Only,
-                headingsProperOrder: newScores.headingsProperOrder,
-                urlNotTooLong: newScores.urlNotTooLong,
-                canonicalTagExists: newScores.canonicalTagExists,
-                noRedirectLinks: newScores.noRedirectLinks,
-                noHttpLinks: newScores.noHttpLinks,          
-                noInternalBrokenLinks: newScores.noInternalBrokenLinks,
-                noExternalBrokenLinks: newScores.noExternalBrokenLinks,
-                mobileResponsive: newScores.mobileResponsive,
-                imagesHaveAltText: newScores.imagesHaveAltText,
-                noGrammarSpellingErrors: newScores.noGrammarSpellingErrors,
-                contentNotDuplicated: newScores.contentNotDuplicated,
-              },
-              lastCalculated: new Date(),
-            });
-          }
-
-          if (completeWebpage.analysisId) {
-            await WebpageAnalysis.findByIdAndUpdate(
-              completeWebpage.analysisId,
-              { slowAnalysisCompleted: true }
-            );
-          }
-
-          logger.info(
-            `✅ Scores updated successfully for ${webpage.pageUrl}`,
-            userId
-          );
-          processedPages++;
-        } catch (error) {
-          logger.error(
-            `Failed to recalculate scores for ${webpage.pageUrl}: ${error.message}`,
-            userId
-          );
-          logger.error(error.stack);
-        }
-      }
-
-      logger.debug(
-        `Processing score recalculation batch ${batchNumber}/${totalBatches}`,
-        userId
-      );
+      logger.debug(`Score recalc batch ${batchNumber}/${totalBatches}`, userId);
     }
 
-    logger.info(
-      `Recalculated scores for ${processedPages}/${webpages.length} pages`,
-      userId
-    );
+    logger.info(`Recalculated scores for ${processedPages}/${webpages.length} pages`, userId);
   }
 
   async updateWebpageWithDuplicates(webpageId, duplicates, duplicateScore) {

@@ -6,6 +6,7 @@ const ActivityService = require("../services/activity-service");
 const config = require("../config/scraper");
 const logger = require("../config/logger");
 const axios = require("axios");
+const {scraperService} = require("../services/scraper-service");
 
 const scraper = new WebScraper();
 
@@ -86,7 +87,8 @@ class FastScraperJob {
         );
 
         if (i + batchSize < urls.length) {
-          await this.sleep(200);
+          const batchDelay = config.batch_delays?.fast_scraper ?? 50;
+          await this.sleep(batchDelay);
         }
       }
 
@@ -156,9 +158,9 @@ class FastScraperJob {
       );
 
       // Find all webpages that were created but not fully processed
-      const incompleteWebpages =
-        await this.webpageService.findIncompleteWebpages(userActivityId);
-
+      // const incompleteWebpages =
+      //   await this.webpageService.findIncompleteWebpages(userActivityId);
+      const incompleteWebpages = await scraperService.findIncompleteWebpages(userActivityId);
       if (!incompleteWebpages || incompleteWebpages.length === 0) {
         logger.info("No incomplete webpages found", userId);
         return { updated: 0 };
@@ -170,7 +172,11 @@ class FastScraperJob {
       );
 
       // Mark all incomplete pages as failed
-      const updateResult = await this.webpageService.markWebpagesAsFailed(
+      // const updateResult = await this.webpageService.markWebpagesAsFailed(
+      //   userActivityId,
+      //   "Scraping stopped before completion"
+      // );
+      const updateResult = await scraperService.markWebpagesAsFailed(
         userActivityId,
         "Scraping stopped before completion"
       );

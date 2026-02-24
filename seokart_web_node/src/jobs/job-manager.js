@@ -1,10 +1,12 @@
 const FastScraperJob = require("./fast-scraper");
 const SlowAnalyzerJob = require("./slow-analyzer");
 const SitemapService = require("../services/sitemap-service");
+const analysisQueue = require("../queue/analysisQueue");
 const { Sitemap } = require("../models/webpage-models");
 const logger = require("../config/logger");
 const WebpageService = require("../services/webpage-service");
 const crashRecoveryService = require("../services/crash-recovery-service");
+const {scraperService} = require("../services/scraper-service");
 
 class JobManager {
   constructor() {
@@ -155,27 +157,72 @@ class JobManager {
         };
       }
 
-      logger.info(`Phase 3: Starting slow analysis`, userId);
-      this.activeJobs.get(jobId).status = "slow_analysis";
+      // Queue slow analyzer as background job (same pattern as web crawler)
+      logger.info(`Phase 3: Queuing slow analysis as background job`, userId);
+      this.activeJobs.get(jobId).status = "analysis_queued";
 
-      const slowAnalyzerJob = new SlowAnalyzerJob();
-      const slowResults = await slowAnalyzerJob.analyzeWebpages(
-        userId,
-        activityId,
-        websiteUrl
-      );
+      let analysisQueued = false;
+      try {
+        const existingAnalysisJob = await analysisQueue.getJob(`analysis_${activityId}`);
+        if (existingAnalysisJob) {
+          const state = await existingAnalysisJob.getState();
+          if (["waiting", "delayed", "active"].includes(state)) {
+            analysisQueued = true;
+            logger.info(`Analysis job already queued for activity ${activityId}`, userId);
+            return;
+          }
+          await existingAnalysisJob.remove();
+          logger.info(`Analysis job removed for activity ${activityId}`, userId);
+        }
+        // ADD - QUEUE SLOW ANALYSIS
+        const job = await analysisQueue.add(
+          "analysis",
+          { activityId: activityId.toString(), userId, websiteUrl },
+          { jobId: `analysis_${activityId}`, removeOnComplete: true }
+        );
+        logger.info(`Analysis job queued for activity ${activityId}`, userId);
+        logger.info(`Analysis job ID: ${job.id}`, userId);
+      } catch (queueErr) {
+        logger.warn(`Analysis queue add failed, running analyzer in-process: ${queueErr.message}`, userId);
+      }
+
+      if (!analysisQueued) {
+        this.activeJobs.get(jobId).status = "slow_analysis";
+        const slowAnalyzerJob = new SlowAnalyzerJob();
+        const slowResults = await slowAnalyzerJob.analyzeWebpages(userId, activityId, websiteUrl);
+        this.activeJobs.get(jobId).status = "completed";
+        this.stats.completedJobs++;
+        this.stats.activeJobs--;
+        this.stopHeartbeat(jobId);
+        const totalTime = Date.now() - this.activeJobs.get(jobId).startTime;
+        this.activeJobs.delete(jobId);
+        return {
+          jobId,
+          totalUrls: allUrls.length,
+          sitemaps: sitemapUrls.length,
+          sitemapStats: sitemapResult,
+          fastResults: { successful: fastResults.successful, failed: fastResults.failed, totalTime: fastResults.totalTime },
+          slowResults: {
+            analyzed: slowResults.analyzed,
+            updated: slowResults.updated,
+            duplicatesFound: slowResults.duplicatesFound,
+            brokenLinksFound: slowResults.brokenLinksFound,
+            totalTime: slowResults.totalTime,
+          },
+          processingTime: totalTime,
+          slowAnalysisCompleted: true,
+        };
+      }
 
       this.activeJobs.get(jobId).status = "completed";
       this.stats.completedJobs++;
       this.stats.activeJobs--;
-
-      // ADD - STOP HEARTBEAT ON SUCCESS
       this.stopHeartbeat(jobId);
 
       const totalTime = Date.now() - this.activeJobs.get(jobId).startTime;
 
       logger.info(
-        `Job ${jobId} completed successfully in ${totalTime}ms`,
+        `Job ${jobId} scrape completed; analysis queued (${totalTime}ms)`,
         userId
       );
 
@@ -191,15 +238,9 @@ class JobManager {
           failed: fastResults.failed,
           totalTime: fastResults.totalTime,
         },
-        slowResults: {
-          analyzed: slowResults.analyzed,
-          updated: slowResults.updated,
-          duplicatesFound: slowResults.duplicatesFound,
-          brokenLinksFound: slowResults.brokenLinksFound,
-          totalTime: slowResults.totalTime,
-        },
         processingTime: totalTime,
-        slowAnalysisCompleted: true,
+        slowAnalysisCompleted: false,
+        slowAnalysisPending: true,
       };
     } catch (error) {
       this.stats.failedJobs++;
@@ -250,7 +291,8 @@ class JobManager {
         this.webpageService = new WebpageService();
       }
 
-      const incompleteCount = await this.webpageService.getIncompleteWebpagesCount(activityId);
+      // const incompleteCount = await this.webpageService.getIncompleteWebpagesCount(activityId);
+      const incompleteCount = await scraperService.getIncompleteWebpagesCount(activityId);
       
       if (incompleteCount === 0) {
         return { updated: 0, found: 0 };

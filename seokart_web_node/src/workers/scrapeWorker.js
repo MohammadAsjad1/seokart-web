@@ -6,7 +6,7 @@ const worker = new Worker(
   path.join(__dirname, "scrapeProcessor.js"), 
   {
     connection,
-    concurrency: 2, // creates 1 sandbox process
+    concurrency: 1, // creates 1 sandbox process
     maxStalledCount: 3,
   }
 );

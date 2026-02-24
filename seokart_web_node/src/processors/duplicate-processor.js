@@ -12,20 +12,34 @@ class DuplicateProcessor {
     };
   }
 
-  async findDuplicates(currentWebpages, userId, websiteUrl) {
+  /**
+   * Load all webpages for the site once (call before findDuplicates in a loop to avoid N queries).
+   */
+  async loadAllWebpagesForSite(userId, websiteUrl) {
+    return WebpageCore.find({
+      userId,
+      websiteUrl,
+      $or: [
+        { title: { $exists: true, $ne: '', $ne: null } },
+        { metaDescription: { $exists: true, $ne: '', $ne: null } },
+        { content: { $exists: true, $ne: '', $ne: null } }
+      ]
+    }).select('_id pageUrl title metaDescription content wordCount').lean();
+  }
+
+  /**
+   * @param {object[]} currentWebpages - batch of pages to check
+   * @param {string} userId
+   * @param {string} websiteUrl
+   * @param {object[]} [allWebpagesPreloaded] - if provided, skip DB load (use when batching to avoid N queries)
+   */
+  async findDuplicates(currentWebpages, userId, websiteUrl, allWebpagesPreloaded) {
     try {
       this.stats.webpagesAnalyzed += currentWebpages.length;
 
-      // Get ALL webpages for this website from database (not just current batch)
-      const allWebpages = await WebpageCore.find({
-        userId,
-        websiteUrl,
-        $or: [
-          { title: { $exists: true, $ne: '', $ne: null } },
-          { metaDescription: { $exists: true, $ne: '', $ne: null } },
-          { content: { $exists: true, $ne: '', $ne: null } }
-        ]
-      }).select('_id pageUrl title metaDescription content wordCount').lean();
+      const allWebpages = Array.isArray(allWebpagesPreloaded)
+        ? allWebpagesPreloaded
+        : await this.loadAllWebpagesForSite(userId, websiteUrl);
 
       logger.info(`Analyzing ${currentWebpages.length} pages against ${allWebpages.length} total pages for duplicates`, userId);
 

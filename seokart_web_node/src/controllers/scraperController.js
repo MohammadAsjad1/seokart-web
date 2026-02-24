@@ -237,12 +237,19 @@ const webCrawler = async ({
       );
     
       const wasStoppedByUser = result.stoppedByUser || false;
-      const finalStatus = wasStoppedByUser ? "stopped" : "completed";
-    
+      const slowAnalysisPending = result.slowAnalysisPending === true;
+      const finalStatus = wasStoppedByUser
+        ? "stopped"
+        : slowAnalysisPending
+          ? "analyzing"
+          : "completed";
+
       logger.info(
         wasStoppedByUser
           ? "🛑 Background processing stopped by user"
-          : "✅ Background processing completed",
+          : slowAnalysisPending
+            ? "✅ Scraping completed; analysis queued (background job)"
+            : "✅ Background processing completed",
         userId,
         {
           websiteUrl: cleanUrl,
@@ -251,14 +258,14 @@ const webCrawler = async ({
           cleanedUp: result.cleanupResults?.updated || 0,
         }
       );
-    
+
       const totalFailed = result.fastResults.failed + (result.cleanupResults?.updated || 0);
     
       // Update User Activity Record
       await UserActivity.findByIdAndUpdate(userActivity._id, {
         status: finalStatus,
-        progress: wasStoppedByUser ? userActivity.progress : 100,
-        endTime: new Date(),
+        progress: wasStoppedByUser ? userActivity.progress : slowAnalysisPending ? 85 : 100,
+        endTime: wasStoppedByUser || slowAnalysisPending ? undefined : new Date(),
         webpageCount: result.totalUrls,
         webpagesSuccessful: result.fastResults.successful,
         webpagesFailed: totalFailed,
@@ -266,7 +273,7 @@ const webCrawler = async ({
         fastScrapingCompleted: !wasStoppedByUser,
         slowAnalysisCompleted: result.slowAnalysisCompleted || false,
         isSitemapCrawling: 0,
-        isWebpageCrawling: 0,
+        isWebpageCrawling: slowAnalysisPending ? 2 : 0,
         lastUpdated: new Date(),
         lastHeartbeat: new Date(),
         fastScrapingResults: {
@@ -276,13 +283,15 @@ const webCrawler = async ({
           incompleteMarkedFailed: result.cleanupResults?.updated || 0,
           processingTime: result.fastResults.totalTime,
         },
-        slowAnalysisResults: result.slowResults ? {
-          analyzed: result.slowResults.analyzed,
-          updated: result.slowResults.updated,
-          duplicatesFound: result.slowResults.duplicatesFound,
-          brokenLinksFound: result.slowResults.brokenLinksFound,
-          processingTime: result.slowResults.totalTime,
-        } : null,
+        slowAnalysisResults: result.slowResults
+          ? {
+              analyzed: result.slowResults.analyzed,
+              updated: result.slowResults.updated,
+              duplicatesFound: result.slowResults.duplicatesFound,
+              brokenLinksFound: result.slowResults.brokenLinksFound,
+              processingTime: result.slowResults.totalTime,
+            }
+          : null,
       });
     
       // Update user plan usage
@@ -310,12 +319,15 @@ const webCrawler = async ({
         processingTime: result.processingTime,
         message: wasStoppedByUser
           ? `Crawl stopped by user. ${result.cleanupResults?.updated || 0} incomplete pages marked as failed.`
-          : `Crawl completed! Processed ${result.fastResults.successful} pages successfully`,
+          : slowAnalysisPending
+            ? `Scraping done! Analysis (duplicates, links, scores) running in background.`
+            : `Crawl completed! Processed ${result.fastResults.successful} pages successfully`,
         slowAnalysisCompleted: result.slowAnalysisCompleted,
+        slowAnalysisPending: slowAnalysisPending || false,
         stoppedByUser: wasStoppedByUser,
         timestamp: new Date().toISOString(),
       });
-    
+
       await emitUserActivitiesUpdate(userId);
     
     } catch (error) {
@@ -329,9 +341,10 @@ const webCrawler = async ({
         isRateLimited,
       });
     
-      const WebpageService = require("../services/webpage-service");
-      const webpageService = new WebpageService();
-      const incompleteCount = await webpageService.getIncompleteWebpagesCount(userActivity._id);
+      // const WebpageService = require("../services/webpage-service");
+      // const webpageService = new WebpageService();
+      // const incompleteCount = await webpageService.getIncompleteWebpagesCount(userActivity._id);
+      const incompleteCount = await scraperService.getIncompleteWebpagesCount(userActivity._id);
     
       if (incompleteCount > 0) {
         logger.warn(`${incompleteCount} incomplete pages were cleaned up during failure`, userId);
@@ -1439,4 +1452,5 @@ module.exports = {
   calculateProcessingSpeed,
   calculateSuccessRate,
   webCrawler,
+  emitUserActivitiesUpdate,
 };

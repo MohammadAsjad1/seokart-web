@@ -1,32 +1,43 @@
 module.exports = {
+  // Tuned for ~2500 pages in ~25–30 min total (sitemap + scrape + analyzer)
   concurrency: {
-    fast_scraper: parseInt(process.env.FAST_SCRAPER_CONCURRENCY) || 15,
+    fast_scraper: parseInt(process.env.FAST_SCRAPER_CONCURRENCY) || 20,
     slow_analyzer: parseInt(process.env.SLOW_ANALYZER_CONCURRENCY) || 12,
-    sitemap_processing: parseInt(process.env.SITEMAP_CONCURRENCY) || 5,
-    max_users: parseInt(process.env.MAX_CONCURRENT_USERS) || 10
+    link_validation: parseInt(process.env.LINK_VALIDATION_CONCURRENCY) || 20,
+    link_checks_per_page: parseInt(process.env.LINK_CHECKS_PER_PAGE) || 40,
+    sitemap_processing: parseInt(process.env.SITEMAP_CONCURRENCY) || 8,
+    max_users: parseInt(process.env.MAX_CONCURRENT_USERS) || 3
   },
 
   timeouts: {
-    quick_request: 4000,
+    quick_request: 5000,
     standard_request: 8000,
     heavy_request: 15000,
     sitemap_fetch: 12000,
-    link_check: 3000
+    link_check: parseInt(process.env.LINK_CHECK_TIMEOUT_MS) || 3000
   },
 
   batch_sizes: {
-    fast_scrape: 25,
-    slow_analysis: 15,
-    duplicate_check: 50,
-    link_validation: 40
+    fast_scrape: parseInt(process.env.FAST_SCRAPE_BATCH) || 50,
+    slow_analysis: 20,
+    duplicate_check: parseInt(process.env.DUPLICATE_CHECK_BATCH) || 60,
+    link_validation: parseInt(process.env.LINK_VALIDATION_BATCH) || 50,
+    score_recalc: parseInt(process.env.SCORE_RECALC_BATCH) || 40
   },
 
   rate_limits: {
-    base_delay: 250,
-    max_delay: 8000,
+    base_delay: 150,
+    max_delay: 6000,
     error_multiplier: 1.5,
     success_reduction: 0.8,
-    domain_cooldown: 30000
+    domain_cooldown: 20000
+  },
+
+  // Inter-batch delays (ms) - lower = faster, watch for rate limits
+  batch_delays: {
+    fast_scraper: parseInt(process.env.FAST_SCRAPER_BATCH_DELAY_MS) || 50,
+    duplicate_check: 30,
+    link_validation: 50,
   },
 
   memory: {
@@ -72,6 +83,7 @@ module.exports = {
     progress_update_threshold: 10, // update progress every 10 items
     socket_emit_throttle: 2000, // 2 seconds
     stats_collection_interval: 30000, // 30 seconds
-    health_check_interval: 60000 // 1 minute
+    health_check_interval: 60000, // 1 minute
+    link_validation_max_links_per_page: parseInt(process.env.LINK_VALIDATION_MAX_LINKS_PER_PAGE) || 80 // cap to avoid one page dominating; 0 = no cap
   }
 };
