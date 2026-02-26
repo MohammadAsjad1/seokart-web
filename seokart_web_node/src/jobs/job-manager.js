@@ -182,11 +182,13 @@ class JobManager {
         );
         logger.info(`Analysis job queued for activity ${activityId}`, userId);
         logger.info(`Analysis job ID: ${job.id}`, userId);
+        analysisQueued = true;
       } catch (queueErr) {
         logger.warn(`Analysis queue add failed, running analyzer in-process: ${queueErr.message}`, userId);
       }
 
       if (!analysisQueued) {
+        logger.info(`Analysis job not queued, running analyzer in-process`, userId);
         this.activeJobs.get(jobId).status = "slow_analysis";
         const slowAnalyzerJob = new SlowAnalyzerJob();
         const slowResults = await slowAnalyzerJob.analyzeWebpages(userId, activityId, websiteUrl);

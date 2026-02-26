@@ -600,13 +600,13 @@ const handleSingleUrlCrawl = async (req, res) => {
     );
 
     // Calculate SEO scores using the new system
-    // console.log("Calculating SEO scores...");
-    // const scoreResult = scoreCalculator.calculateNewSystemScores({
-    //   ...scrapedData,
-    //   grammarSpelling: grammarSpellIssues,
-    //   duplicates: {},
-    //   brokenLinks: [],
-    // });
+    console.log("Calculating SEO scores...");
+    const scoreResult = scoreCalculator.calculateNewSystemScores({
+      ...scrapedData,
+      grammarSpelling: grammarSpellIssues,
+      duplicates: {},
+      brokenLinks: [],
+    });
 
     // Process links and get broken links
     console.log("Processing links...");

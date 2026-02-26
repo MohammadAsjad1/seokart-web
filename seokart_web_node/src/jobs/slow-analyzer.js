@@ -40,6 +40,16 @@ class SlowAnalyzerJob {
 
     logger.info(`Starting slow analysis for website: ${websiteUrl}`, userId);
 
+    // Keep heartbeat alive during slow analysis (runs in queue worker; main job heartbeat is stopped)
+    const HEARTBEAT_INTERVAL_MS = 10000; // 10s, stalled threshold is 30s
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        await this.activityService.updateHeartbeat(userActivityId);
+      } catch (e) {
+        logger.debug("Slow analysis heartbeat error", e?.message);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+
     try {
       await this.activityService.updateProgress(userActivityId, {
         progress: 85,
@@ -136,6 +146,8 @@ class SlowAnalyzerJob {
       logger.error("Slow analysis failed", error, userId);
 
       throw error;
+    } finally {
+      clearInterval(heartbeatInterval);
     }
   }
 

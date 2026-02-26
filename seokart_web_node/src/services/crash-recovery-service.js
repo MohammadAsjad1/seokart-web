@@ -4,12 +4,14 @@ const { UserActivity } = require("../models/activity-models");
 const logger = require("../config/logger");
 const os = require("os");
 const crypto = require("crypto");
+const {scraperService} = require("./scraper-service");
 
 class CrashRecoveryService {
   constructor() {
     this.serverInstanceId = this.generateInstanceId();
     this.stalledCheckInterval = null;
     this.STALLED_THRESHOLD = 30000; // 30 seconds without heartbeat
+    // this.STALLED_THRESHOLD = 60000; // 60 seconds without heartbeat
     this.CHECK_INTERVAL = 10000; // Check every 10 seconds
   }
 
@@ -76,13 +78,16 @@ class CrashRecoveryService {
           });
 
           // Cleanup incomplete webpages
-          const WebpageService = require("./webpage-service");
-          const webpageService = new WebpageService();
-          await webpageService.markWebpagesAsFailed(
+          // const WebpageService = require("./webpage-service");
+          // const webpageService = new WebpageService();
+          // await webpageService.markWebpagesAsFailed(
+          //   activity._id,
+          //   "Server crash - incomplete processing"
+          // );
+          await scraperService.markWebpagesAsFailed(
             activity._id,
             "Server crash - incomplete processing"
           );
-
           failed++;
           logger.warn(`❌ Marked activity ${activity._id} as failed (crash recovery)`);
         } catch (error) {
@@ -140,7 +145,7 @@ class CrashRecoveryService {
               endTime: new Date(),
               errorMessages: [
                 ...(activity.errorMessages || []),
-                `Job stalled - no heartbeat for ${this.STALLED_THRESHOLD / 1000}s`
+                `Crawl stopped responding after ${this.STALLED_THRESHOLD / 1000}s. Your data is safe. Start a new crawl to continue.`
               ],
               isSitemapCrawling: 0,
               isWebpageCrawling: 0,
@@ -150,14 +155,19 @@ class CrashRecoveryService {
           });
 
           // Cleanup incomplete webpages
-          const WebpageService = require("./webpage-service");
-          const webpageService = new WebpageService();
-          await webpageService.markWebpagesAsFailed(
+          // const WebpageService = require("./webpage-service");
+          // const webpageService = new WebpageService();
+          // await webpageService.markWebpagesAsFailed(
+          //   activity._id,
+          //   "Job stalled - no heartbeat"
+          // );
+          await scraperService.markWebpagesAsFailed(
             activity._id,
             "Job stalled - no heartbeat"
           );
         } catch (error) {
           logger.error(`Error marking stalled activity ${activity._id}`, error);
+          console.log(error);
         }
       }
     } catch (error) {

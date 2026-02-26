@@ -5,6 +5,13 @@ const logger = require("../config/logger");
 const pLimit = require("p-limit").default;
 const config = require("../config/scraper");
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+const DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+};
+
 class LinkProcessor {
   constructor() {
     this.stats = {
@@ -25,8 +32,13 @@ class LinkProcessor {
       const pageUrl = webpage.pageUrl || webpage.url;
       const websiteUrl = webpage.websiteUrl;
 
+      let startTime = Date.now();
+
       logger.info(`🔍 Starting link validation for: ${pageUrl}`);
       let links = await this.extractLinksFromWebpage(webpage, pageUrl);
+      let endTime = Date.now();
+      let duration = endTime - startTime;
+      logger.info(`🔍 Link extraction time: ${duration}ms`);
       if (!links || links.length === 0) {
         logger.warn(`⚠️  No links found on: ${pageUrl}`);
         return {
@@ -44,12 +56,16 @@ class LinkProcessor {
       //   logger.info(`📊 Found ${links.length} unique links to validate on: ${pageUrl}`);
       // }
 
+      startTime = Date.now();
       const results = await this.validateLinksWithRateLimit(
         links,
         pageUrl,
         websiteUrl
       );
-      // console.timeEnd("validateLinksWithRateLimit");
+      endTime = Date.now();
+      duration = endTime - startTime;
+      logger.info(`🔍 Link validation time: ${duration}ms`);
+        // console.timeEnd("validateLinksWithRateLimit");
       logger.info(
         `✅ Link validation complete for ${pageUrl}:\n` +
         `   - ${results.internalBrokenLinks.length} internal broken\n` +
@@ -153,40 +169,38 @@ class LinkProcessor {
   }
 
   async validateLinksWithRateLimit(links, pageUrl, websiteUrl) {
+    if (!links.length) return { internalBrokenLinks: [], externalBrokenLinks: [], redirectLinks: [] };
+  
     const internalBrokenLinks = [];
     const externalBrokenLinks = [];
     const redirectLinks = [];
-
-    const concurrency = config.concurrency?.link_checks_per_page ?? 40;
-    const limit = pLimit(concurrency);
-
-    await Promise.all(
+  
+    const limit = pLimit(config.concurrency?.link_checks_per_page ?? 40);
+  
+    await Promise.allSettled(
       links.map(link =>
         limit(async () => {
-          const result = await this.validateLink(link, pageUrl, websiteUrl);
-          if (!result) return;
-
-          if (result.isRedirect) {
-            redirectLinks.push(result);
-          } else if (result.isBroken) {
-            if (result.type === "internal") {
-              internalBrokenLinks.push(result);
-            } else {
-              externalBrokenLinks.push(result);
+          try {
+            const result = await this.validateLink(link, pageUrl, websiteUrl);
+            if (!result) return;
+  
+            if (result.isRedirect) {
+              redirectLinks.push(result);
+            } else if (result.isBroken) {
+              (result.type === "internal" ? internalBrokenLinks : externalBrokenLinks).push(result);
             }
+          } catch (err) {
+            logger.warn(`⚠️ Failed to validate link "${link}": ${err.message}`);
           }
         })
       )
     );
-
-
+  
     logger.info(
-      `📈 Validation complete: ` +
-      `${internalBrokenLinks.length} internal broken, ` +
-      `${externalBrokenLinks.length} external broken, ` +
-      `${redirectLinks.length} redirects`
+      `📈 Validation complete: ${internalBrokenLinks.length} internal broken, ` +
+      `${externalBrokenLinks.length} external broken, ${redirectLinks.length} redirects`
     );
-
+  
     return { internalBrokenLinks, externalBrokenLinks, redirectLinks };
   }
 
@@ -245,15 +259,9 @@ class LinkProcessor {
     }
   }
 
-  _parseResponse(response) {
-    const status = response.status;
-    if (status === 301 || status === 302 || status === 307 || status === 308) {
-      return {
-        isBroken: false,
-        isRedirect: true,
-        statusCode: status,
-        redirectTo: response.headers.location || "",
-      };
+  parseResponse({ status, headers }) {
+    if (REDIRECT_STATUSES.has(status)) {
+      return { isBroken: false, isRedirect: true, statusCode: status, redirectTo: headers.location || "" };
     }
     if (status >= 400) {
       return { isBroken: true, isRedirect: false, statusCode: status, error: `HTTP ${status}` };
@@ -277,42 +285,32 @@ class LinkProcessor {
     } catch {}
   }
 
-  async checkLinkStatus(url) {
-    const domainDead = this._isDomainDead(url);
-    if (domainDead === true) {
-      return { isBroken: true, isRedirect: false, statusCode: 0, error: "Domain unreachable (cached)" };
-    }
-
-    const reqOpts = {
-      timeout: this.timeout,
+  async checkLinkStatus(url, timeout) {
+    const baseConfig = {
+      timeout,
       maxRedirects: 0,
       validateStatus: () => true,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
+      headers: DEFAULT_HEADERS,
     };
-
+  
     try {
-      const res = await axios.head(url, reqOpts);
-      this._markDomain(url, false);
-      if (res.status === 405 || res.status === 501) {
-        const getRes = await axios.get(url, { ...reqOpts, maxContentLength: 0 });
-        return this._parseResponse(getRes);
-      }
-      return this._parseResponse(res);
-    } catch (headErr) {
-      try {
-        const getRes = await axios.get(url, { ...reqOpts, maxContentLength: 0 });
-        this._markDomain(url, false);
-        return this._parseResponse(getRes);
-      } catch (getErr) {
-        const code = getErr.code || headErr.code || "";
-        if (["ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "EAI_AGAIN"].includes(code)) {
-          this._markDomain(url, true);
-        }
-        return { isBroken: true, isRedirect: false, statusCode: 0, error: code || "Connection failed" };
-      }
+      const response = await axios.head(url, baseConfig);
+      return this.parseResponse(response);
+    } catch {
+      // HEAD not supported by server, fall back to GET
+    }
+  
+    try {
+      const response = await axios.get(url, { ...baseConfig, responseType: "stream" });
+      response.data.destroy();
+      return this.parseResponse(response);
+    } catch (err) {
+      return {
+        isBroken: true,
+        isRedirect: false,
+        statusCode: 0,
+        error: err.code || err.message || "Connection failed",
+      };
     }
   }
 

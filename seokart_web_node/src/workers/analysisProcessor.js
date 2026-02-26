@@ -33,7 +33,9 @@ module.exports = async function (job) {
   logger.info(`Analysis job ${job.id} starting for activity ${activityId}`, userId);
 
   const slowAnalyzerJob = new SlowAnalyzerJob();
+  console.time("slow analyzer job")
   const result = await slowAnalyzerJob.analyzeWebpages(userId, activityId, websiteUrl);
+  console.timeEnd("slow analyzer job")
 
   const { emitUserActivitiesUpdate } = require("../controllers/scraperController");
 

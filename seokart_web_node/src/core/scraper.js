@@ -7,9 +7,6 @@ const RateLimiter = require("./rate-limiter");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const RAW_PROXIES = [
-  "142.111.48.253:7030:muxhrzvr:th23dyu55sh3",
-  "31.59.20.176:6754:muxhrzvr:th23dyu55sh3",
-  "38.170.176.177:5572:muxhrzvr:th23dyu55sh3",
   "198.23.239.134:6540:muxhrzvr:th23dyu55sh3",
   "45.38.107.97:6014:muxhrzvr:th23dyu55sh3",
   "107.172.163.27:6543:muxhrzvr:th23dyu55sh3",
@@ -17,6 +14,9 @@ const RAW_PROXIES = [
   "216.10.27.159:6837:muxhrzvr:th23dyu55sh3",
   "142.111.67.146:5611:muxhrzvr:th23dyu55sh3",
   "142.147.128.93:6593:muxhrzvr:th23dyu55sh3",
+  "142.111.48.253:7030:muxhrzvr:th23dyu55sh3",
+  "31.59.20.176:6754:muxhrzvr:th23dyu55sh3",
+  "38.170.176.177:5572:muxhrzvr:th23dyu55sh3",
 ];
 
 const PROXIES = RAW_PROXIES.map((p) => {
@@ -74,39 +74,39 @@ class SequentialRotation {
     return available[0].idx;
   }
 
-  // getNextProxy(skipCurrent = false) {
-  //   if (skipCurrent || this.requestCount >= this.requestsPerProxy) {
-  //     this.currentIndex = this.findNextAvailableProxy();
-  //     this.requestCount = 0;
-  //     console.log(
-  //       `🔄 Switching to proxy ${this.currentIndex + 1}/${this.proxies.length}`
-  //     );
-  //   }
-
-  //   this.requestCount++;
-  //   return {
-  //     proxy: this.proxies[this.currentIndex],
-  //     agent: this.agents[this.currentIndex],
-  //     proxyIndex: this.currentIndex,
-  //     userAgent: this.fixedUserAgent,
-  //     requestNum: this.requestCount,
-  //   };
-  // }
-  getNextProxy(forceSwitch = false) {
-    if (forceSwitch || this.requestCount >= this.requestsPerProxy) {
-      this.currentIndex = this.getBestProxy();
+  getNextProxy(skipCurrent = false) {
+    if (skipCurrent || this.requestCount >= this.requestsPerProxy) {
+      this.currentIndex = this.findNextAvailableProxy();
       this.requestCount = 0;
+      console.log(
+        `🔄 Switching to proxy ${this.currentIndex + 1}/${this.proxies.length}`
+      );
     }
-  
+
     this.requestCount++;
-  
     return {
       proxy: this.proxies[this.currentIndex],
       agent: this.agents[this.currentIndex],
       proxyIndex: this.currentIndex,
       userAgent: this.fixedUserAgent,
+      requestNum: this.requestCount,
     };
   }
+  // getNextProxy(forceSwitch = false) {
+  //   if (forceSwitch || this.requestCount >= this.requestsPerProxy) {
+  //     this.currentIndex = this.getBestProxy();
+  //     this.requestCount = 0;
+  //   }
+  
+  //   this.requestCount++;
+  
+  //   return {
+  //     proxy: this.proxies[this.currentIndex],
+  //     agent: this.agents[this.currentIndex],
+  //     proxyIndex: this.currentIndex,
+  //     userAgent: this.fixedUserAgent,
+  //   };
+  // }
 
   findNextAvailableProxy() {
     let attempts = 0;
@@ -263,9 +263,9 @@ class WebScraper {
           responseType: "text",
           validateStatus: (status) => status < 500,
           maxContentLength: 10 * 1024 * 1024,
-          httpsAgent: agent,
-          httpAgent: agent,
-          proxy: false,
+          // httpsAgent: agent,
+          // httpAgent: agent,
+          // proxy: false,
           headers: {
             "User-Agent": userAgent,
             Accept:
