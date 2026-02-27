@@ -226,7 +226,7 @@ class LinkProcessor {
       }
 
       const linkType = this.getLinkType(absoluteUrl, websiteUrl);
-      const linkStatus = await this.checkLinkStatus(absoluteUrl);
+      const linkStatus = await this.checkLinkStatus(absoluteUrl, this.timeout);
 
       if (linkStatus.isRedirect) {
         return {

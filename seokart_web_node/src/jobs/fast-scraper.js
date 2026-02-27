@@ -38,12 +38,20 @@ class FastScraperJob {
 
     try {
       for (let i = 0; i < urls.length; i += batchSize) {
-        // Check if scraping should stop
+        // Check if scraping should stop (in-process signal)
         if (this.scraper.shouldStop) {
           logger.warn(
             "Scraping stopped - cleaning up incomplete webpages",
             userId
           );
+          await this.cleanupIncompleteWebpages(userActivityId, userId);
+          break;
+        }
+        // Check DB for stop requested from another process (e.g. stop crawl API)
+        const activity = await this.activityService.getActivity(userActivityId);
+        if (activity?.status === "stopped") {
+          logger.warn("Stop requested via DB - stopping scrape", userId);
+          this.scraper.stopScraping();
           await this.cleanupIncompleteWebpages(userActivityId, userId);
           break;
         }

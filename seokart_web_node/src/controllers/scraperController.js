@@ -624,6 +624,7 @@ const handleSingleUrlCrawl = async (req, res) => {
 
     // Prepare current webpage data for duplicate detection
     const currentWebpageData = {
+      _id: webpageCore._id,
       pageUrl,
       title: scrapedData.title,
       metaDescription: scrapedData.metaDescription,
@@ -641,7 +642,7 @@ const handleSingleUrlCrawl = async (req, res) => {
     const finalScoreResult = scoreCalculator.calculateNewSystemScores({
       ...scrapedData,
       grammarSpelling: grammarSpellIssues,
-      duplicates: duplicateResults,
+      duplicates: duplicateResults.get(webpageCore._id.toString()),
       noHttpLinks: linkResults.noHttpLinks,
       internalBrokenLinks: linkResults.internalBrokenLinks,
       externalBrokenLinks: linkResults.externalBrokenLinks,

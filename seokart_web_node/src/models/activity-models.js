@@ -8,7 +8,7 @@ const UserActivitySchema = new mongoose.Schema({
   // Status and timing
   status: { 
     type: String, 
-    enum: ['processing', 'analyzing', 'completed', 'failed', 'completed_with_errors'], 
+    enum: ['processing', 'analyzing', 'completed', 'failed', 'completed_with_errors', 'stopped'], 
     default: 'processing'
   },
   startTime: { type: Date, required: true },

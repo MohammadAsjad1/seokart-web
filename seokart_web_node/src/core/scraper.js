@@ -613,12 +613,25 @@ class WebScraper {
           $('meta[name="viewport"]')
             .attr("content")
             ?.includes("width=device-width") || false,
-        hasMediaQueries: $("style")
-          .toArray()
-          .some((el) => $(el).html().includes("@media")),
-        hasResponsiveUnits: $("style")
-          .toArray()
-          .some((el) => /(vw|vh|%|em|rem|fr)/i.test($(el).html())),
+      
+        hasMediaQueries:
+          $("style")
+            .toArray()
+            .some((el) => $(el).html()?.includes("@media")) ||
+          $('link[rel="stylesheet"][href]').length > 0,
+      
+        hasResponsiveUnits:
+          $("style")
+            .toArray()
+            .some((el) => /(vw|vh|%|em|rem|fr)/i.test($(el).html() || "")),
+      
+        hasResponsiveFramework:
+          $('link[href*="bootstrap"], link[href*="tailwind"], link[href*="foundation"], link[href*="bulma"]').length > 0 ||
+          $('script[src*="bootstrap"], script[src*="tailwind"]').length > 0 ||
+          /(bootstrap|tailwind|foundation|bulma)/i.test($('html').attr('class') || '') ||
+          $('[class]').toArray().some((el) =>
+            /\b(container|container-fluid|col-|row|grid-|flex-)/i.test($(el).attr('class') || '')
+          ),
       },
     };
   }

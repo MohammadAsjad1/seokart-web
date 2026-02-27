@@ -8,38 +8,52 @@ class DuplicateProcessor {
       webpagesAnalyzed: 0,
       titleDuplicatesFound: 0,
       descriptionDuplicatesFound: 0,
-      contentDuplicatesFound: 0
+      contentDuplicatesFound: 0,
     };
   }
 
-  /**
-   * Load all webpages for the site once (call before findDuplicates in a loop to avoid N queries).
-   */
-  async loadAllWebpagesForSite(userId, websiteUrl) {
-    return WebpageCore.find({
-      userId,
-      websiteUrl,
-      $or: [
-        { title: { $exists: true, $ne: '', $ne: null } },
-        { metaDescription: { $exists: true, $ne: '', $ne: null } },
-        { content: { $exists: true, $ne: '', $ne: null } }
-      ]
-    }).select('_id pageUrl title metaDescription content wordCount').lean();
+  async getCompleteWebpageData(webpageId) {
+    try {
+      const webpageCore = await WebpageCore.findById(webpageId).populate('contentId').lean();
+      if (!webpageCore) {
+        logger.warn(`WebpageCore not found for ID: ${webpageId}`);
+        return null;
+      }
+
+      return {
+        _id: webpageCore._id,
+        pageUrl: webpageCore.pageUrl,
+        title: webpageCore.contentId?.title ?? webpageCore.title,
+        titleLength: webpageCore.contentId?.titleLength ?? webpageCore.titleLength,
+        metaDescription: webpageCore.contentId?.metaDescription ?? webpageCore.metaDescription,
+        metaDescriptionLength: webpageCore.contentId?.metaDescriptionLength ?? webpageCore.metaDescriptionLength,
+        wordCount: webpageCore.contentId?.wordCount ?? webpageCore.wordCount,
+        titleTagCount: webpageCore.contentId?.titleTagCount,
+        content: webpageCore.contentId?.content,
+      };
+    } catch (error) {
+      logger.error(
+        `Error fetching complete webpage data for ${webpageId}:`,
+        error
+      );
+      return null;
+    }
   }
 
-  /**
-   * @param {object[]} currentWebpages - batch of pages to check
-   * @param {string} userId
-   * @param {string} websiteUrl
-   * @param {object[]} [allWebpagesPreloaded] - if provided, skip DB load (use when batching to avoid N queries)
-   */
-  async findDuplicates(currentWebpages, userId, websiteUrl, allWebpagesPreloaded) {
+  async findDuplicates(currentWebpages, userId, websiteUrl) {
     try {
       this.stats.webpagesAnalyzed += currentWebpages.length;
 
-      const allWebpages = Array.isArray(allWebpagesPreloaded)
-        ? allWebpagesPreloaded
-        : await this.loadAllWebpagesForSite(userId, websiteUrl);
+      // Get ALL webpages for this website from database (not just current batch)
+      const allWebpages = await WebpageCore.find({
+        userId,
+        websiteUrl,
+        // $or: [
+        //   { title: { $exists: true, $ne: '', $ne: null } },
+        //   { metaDescription: { $exists: true, $ne: '', $ne: null } },
+        //   { content: { $exists: true, $ne: '', $ne: null } }
+        // ]
+      }).select('_id pageUrl title metaDescription content wordCount').lean()
 
       logger.info(`Analyzing ${currentWebpages.length} pages against ${allWebpages.length} total pages for duplicates`, userId);
 
@@ -59,7 +73,7 @@ class DuplicateProcessor {
 
         // Find title duplicates - be more aggressive
         if (currentPage.title && currentPage.title.trim().length > 5) {
-          duplicates.titleDuplicates = this.findTitleDuplicatesAgainstAll(
+          duplicates.titleDuplicates = await this.findTitleDuplicatesAgainstAll(
             currentPage,
             allWebpages
           );
@@ -71,7 +85,7 @@ class DuplicateProcessor {
 
         // Find meta description duplicates - be more aggressive
         if (currentPage.metaDescription && currentPage.metaDescription.trim().length > 10) {
-          duplicates.descriptionDuplicates = this.findDescriptionDuplicatesAgainstAll(
+          duplicates.descriptionDuplicates = await this.findDescriptionDuplicatesAgainstAll(
             currentPage,
             allWebpages
           );
@@ -83,7 +97,7 @@ class DuplicateProcessor {
 
         // Find content duplicates - be more aggressive
         if (currentPage.content && currentPage.content.trim().length > 100) {
-          duplicates.contentDuplicates = this.findContentDuplicatesAgainstAll(
+          duplicates.contentDuplicates = await this.findContentDuplicatesAgainstAll(
             currentPage,
             allWebpages
           );
@@ -101,12 +115,13 @@ class DuplicateProcessor {
       return duplicateResults;
 
     } catch (error) {
+      console.log("error in findDuplicates", error);
       logger.error('Error finding duplicates', error, userId);
       return new Map();
     }
   }
 
-  findTitleDuplicatesAgainstAll(currentPage, allWebpages) {
+  async findTitleDuplicatesAgainstAll(currentPage, allWebpages) {
     const duplicates = [];
     const currentTitle = this.normalizeTitle(currentPage.title);
     
@@ -114,7 +129,9 @@ class DuplicateProcessor {
       return duplicates;
     }
 
-    for (const webpage of allWebpages) {
+    console.log("allWebpages --------->", allWebpages);
+    for (const webpage1 of allWebpages) {
+      const webpage = await this.getCompleteWebpageData(webpage1._id.toString());
       // Skip self-comparison
       if (webpage._id.toString() === currentPage._id.toString()) {
         continue;
@@ -162,7 +179,7 @@ class DuplicateProcessor {
     return duplicates;
   }
 
-  findDescriptionDuplicatesAgainstAll(currentPage, allWebpages) {
+  async findDescriptionDuplicatesAgainstAll(currentPage, allWebpages) {
     const duplicates = [];
     const currentDesc = this.normalizeDescription(currentPage.metaDescription);
     
@@ -170,7 +187,8 @@ class DuplicateProcessor {
       return duplicates;
     }
 
-    for (const webpage of allWebpages) {
+    for (const webpage1 of allWebpages) {
+      const webpage = await this.getCompleteWebpageData(webpage1._id.toString());
       if (webpage._id.toString() === currentPage._id.toString()) {
         continue;
       }
@@ -207,7 +225,7 @@ class DuplicateProcessor {
     return duplicates;
   }
 
-  findContentDuplicatesAgainstAll(currentPage, allWebpages) {
+  async findContentDuplicatesAgainstAll(currentPage, allWebpages) {
     const duplicates = [];
     const currentContent = this.normalizeContent(currentPage.content);
     
@@ -217,7 +235,8 @@ class DuplicateProcessor {
 
     const currentFingerprint = this.createContentFingerprint(currentContent);
 
-    for (const webpage of allWebpages) {
+    for (const webpage1 of allWebpages) {
+      const webpage = await this.getCompleteWebpageData(webpage1._id.toString());
       if (webpage._id.toString() === currentPage._id.toString()) {
         continue;
       }

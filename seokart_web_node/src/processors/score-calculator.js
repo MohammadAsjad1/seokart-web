@@ -255,15 +255,19 @@ class ScoreCalculator {
 
   checkMobileResponsive(data) {
     const responsive = data.technicalSeo?.responsiveChecks;
-
     if (!responsive) return 0;
-
-    const hasViewport = responsive?.hasViewport || false;
-    const hasMediaQueries = responsive?.hasMediaQueries || false;
-    const hasResponsiveUnits = responsive?.hasResponsiveUnits || false;
-
-    const isResponsive = hasViewport && (hasMediaQueries || hasResponsiveUnits);
-
+  
+    const {
+      hasViewport = false,
+      hasMediaQueries = false,
+      hasResponsiveUnits = false,
+      hasResponsiveFramework = false,
+    } = responsive;
+  
+    const isResponsive =
+      hasViewport &&
+      (hasMediaQueries || hasResponsiveUnits || hasResponsiveFramework);
+  
     return isResponsive ? 5 : 0;
   }
 

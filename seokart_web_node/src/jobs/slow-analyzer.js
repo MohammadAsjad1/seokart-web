@@ -180,13 +180,8 @@ class SlowAnalyzerJob {
   async detectDuplicates(webpages, userId, userActivityId, websiteUrl) {
     logger.info("Phase 1: Detecting duplicates", userId);
 
-    const batchSize = config.batch_sizes.duplicate_check || 30;
+    const batchSize = config.batch_sizes.duplicate_check || 20;
     const totalBatches = Math.ceil(webpages.length / batchSize);
-    const batchDelay = config.batch_delays?.duplicate_check ?? 100;
-
-    // Load all webpages once so we don't query DB on every batch (huge win for 2500+ pages)
-    const allWebpages = await this.duplicateProcessor.loadAllWebpagesForSite(userId, websiteUrl);
-    logger.info(`Loaded ${allWebpages.length} site webpages once for duplicate check`, userId);
 
     for (let i = 0; i < webpages.length; i += batchSize) {
       const batch = webpages.slice(i, i + batchSize);
@@ -200,30 +195,37 @@ class SlowAnalyzerJob {
       const duplicateResults = await this.duplicateProcessor.findDuplicates(
         batch,
         userId,
-        websiteUrl,
-        allWebpages
+        websiteUrl
       );
 
-      // Parallelize duplicate updates for this batch
-      const updatePromises = batch.map(async (webpage) => {
+      for (const webpage of batch) {
         const duplicates = duplicateResults.get(webpage._id.toString());
         if (duplicates) {
+          const duplicateScore = this.calculateDuplicateScore(duplicates);
+
+          await this.updateWebpageWithDuplicates(
+            webpage._id,
+            duplicates,
+            duplicateScore
+          );
+
           this.stats.duplicatesFound +=
             duplicates.titleDuplicates.length +
             duplicates.descriptionDuplicates.length +
             duplicates.contentDuplicates.length;
-          const duplicateScore = this.calculateDuplicateScore(duplicates);
-          await this.updateWebpageWithDuplicates(webpage._id, duplicates, duplicateScore);
         } else {
-          await this.updateWebpageWithDuplicates(webpage._id, {
-            titleDuplicates: [],
-            descriptionDuplicates: [],
-            contentDuplicates: [],
-          }, 100);
+          await this.updateWebpageWithDuplicates(
+            webpage._id,
+            {
+              titleDuplicates: [],
+              descriptionDuplicates: [],
+              contentDuplicates: [],
+            },
+            100
+          );
         }
         this.stats.analyzed++;
-      });
-      await Promise.all(updatePromises);
+      }
 
       try {
         if (
@@ -248,7 +250,7 @@ class SlowAnalyzerJob {
       }
 
       if (i + batchSize < webpages.length) {
-        await this.sleep(batchDelay);
+        await this.sleep(100);
       }
     }
   }

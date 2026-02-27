@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const JobManager = require("../jobs/job-manager");
 const SessionManager = require("../core/session-manager");
 const WebScraper = require("../core/scraper");
@@ -9,6 +10,7 @@ const axios = require("axios");
 const urlUtils = require("../utils/url-utils");
 const { WebpageCore } = require("../models/webpage-models");
 const crashRecoveryService = require("./crash-recovery-service");
+const scrapeQueue = require("../queue/scrapeQueue");
 
 class ScraperService {
   constructor() {
@@ -532,9 +534,7 @@ class ScraperService {
     this.ensureInitialized();
 
     try {
-      console.log(
-        `📋 ScraperService: Stop crawl request for activity ${activityId}`
-      );
+      logger.info(`Attempting to stop crawl for activity ${activityId}`);
 
       if (!activityId) {
         throw new Error("Activity ID is required");
@@ -542,24 +542,48 @@ class ScraperService {
 
       logger.info(`Attempting to stop crawl for activity ${activityId}`);
 
+      let removedFromQueue = false;
+      const activity = await this.activityService.getActivity(activityId);
+      if (activity?.userId != null && activity?.websiteUrl) {
+        const userId = String(activity.userId);
+        const normalizedUrl = (activity.websiteUrl || "").trim();
+        const siteHash = crypto
+          .createHash("sha256")
+          .update(normalizedUrl)
+          .digest("hex")
+          .slice(0, 16);
+        const bullJobId = `crawl_${userId}_${siteHash}`;
+        const queueJob = await scrapeQueue.getJob(bullJobId).catch(() => null);
+        if (queueJob) {
+          const state = await queueJob.getState();
+          if (state === "waiting" || state === "delayed") {
+            await queueJob.remove();
+            removedFromQueue = true;
+            logger.info(
+              `Removed crawl job ${bullJobId} from queue (state: ${state})`
+            );
+          } else if (state === "active") {
+            logger.info(
+              `Crawl job ${bullJobId} is active in worker; signaling stop via DB`
+            );
+          }
+        }
+      }
+
       const stopped = await this.jobManager.stopJob(activityId);
-
-      console.log(stopped, "stopped");
-
-      if (stopped) {
+      if (stopped || removedFromQueue) {
         logger.info(`Crawl stopped for activity ${activityId}`);
         return {
           success: true,
           message: "Crawl stop signal sent successfully",
           activityId: activityId,
         };
-      } else {
-        throw new Error(
-          "No active job found for this activity or job is not in a stoppable state"
-        );
       }
+
+      throw new Error(
+        "No active job found for this activity or job is not in a stoppable state"
+      );
     } catch (error) {
-      console.error(`❌ ScraperService stop error:`, error);
       logger.error("Error stopping crawl", error);
       throw error;
     }
