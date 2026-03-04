@@ -17,6 +17,11 @@ const jwt = require("jsonwebtoken");
 const {
   handleSitemapCrawl,
   checkCrawlStatus,
+  calculateEstimatedTime,
+  calculateProcessingSpeed,
+  calculateSuccessRate,
+  getPhaseDescription,
+  getDetailedPhaseInfo,
 } = require("./controllers/scraperController");
 const cookieParser = require("cookie-parser");
 const crashRecoveryService = require("./services/crash-recovery-service");
@@ -25,8 +30,12 @@ const loadRoute = require("./routes/loadRoute");
 const Redis = require("ioredis");
 const { createAdapter } = require("@socket.io/redis-adapter");
 
-if (process.env.ENABLE_WORKER === "true") {
-  require("./workers/scrapeWorker");
+// if (process.env.ENABLE_WORKER === "true") {
+//   require("./workers/scrapeWorker");
+// }
+if (process.env.ENABLE_WORKER === "true" || process.env.ENABLE_CRAWL_V2_WORKER === "true") {
+  require("./workers/crawlV2Phase1Worker");
+  require("./workers/crawlV2Phase2Worker");
 }
 
 const app = express();
@@ -53,6 +62,10 @@ const pubClient = new Redis(process.env.REDIS_HOST);
 const subClient = pubClient.duplicate();
 // io adapter, we need only when we have multiple servers
 io.adapter(createAdapter(pubClient, subClient));
+
+// Initialize socket emitter so API can emit to user rooms (e.g. crawl_started, user_activities_update)
+const { initEmitter } = require("./services/socket-emitter");
+initEmitter().catch((err) => console.error("Socket emitter init failed", err));
 
 const corsOpts = {
   origin: function (origin, callback) {
@@ -275,18 +288,28 @@ io.on("connection", (socket) => {
       }
 
       const { UserActivity } = require("./models/activity-models");
-      const userActivities = await UserActivity.find({ userId }).sort({
-        lastCrawlStarted: -1,
-      });
+      const rawActivities = await UserActivity.find({ userId })
+        .sort({ lastCrawlStarted: -1 })
+        .lean();
+
+      const enhancedActivities = rawActivities.map((activity) => ({
+        ...activity,
+        estimatedTimeRemaining: calculateEstimatedTime(activity),
+        processingSpeed: calculateProcessingSpeed(activity),
+        successRate: calculateSuccessRate(activity),
+        isActive: ["processing", "analyzing"].includes(activity.status),
+        phaseDescription: getPhaseDescription(activity),
+        detailedPhase: getDetailedPhaseInfo(activity),
+      }));
 
       console.log(
-        `📋 Sending ${userActivities.length} activities to user ${userId}`
+        `📋 Sending ${enhancedActivities.length} activities to user ${userId}`
       );
 
       socket.emit("user_activities_update", {
         success: true,
-        count: userActivities.length,
-        data: userActivities,
+        count: enhancedActivities.length,
+        data: enhancedActivities,
       });
     } catch (error) {
       console.error("Error fetching user activities via socket:", error);

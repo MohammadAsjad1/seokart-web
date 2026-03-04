@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon src/server.js",
     "worker:scrape": "node src/workers/scrapeWorker.js",
-    "worker:analysis": "node src/workers/analysisWorker.js"
+    "worker:analysis": "node src/workers/analysisWorker.js",
+    "worker:crawl-v2-phase1": "node src/workers/crawlV2Phase1Worker.js",
+    "worker:crawl-v2-phase2": "node src/workers/crawlV2Phase2Worker.js"
   },
   "keywords": [],
   "author": "",
@@ -43,6 +45,7 @@
     "p-limit": "^6.2.0",
     "path": "^0.12.7",
     "redis": "^4.7.0",
+    "simhash-js": "^1.0.0",
     "simple-spellchecker": "^1.0.2",
     "sitemapper": "^3.2.24",
     "socket.io": "^4.8.1",

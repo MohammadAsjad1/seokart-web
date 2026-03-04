@@ -102,6 +102,10 @@ const UserActivitySchema = new mongoose.Schema({
   canRecover: {
     type: Boolean,
     default: true
+  },
+  _checkpoint: {
+    type: Object,
+    default: null
   }
 }, {
   timestamps: true,

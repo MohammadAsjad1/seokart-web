@@ -10,6 +10,7 @@ const { scraperService } = require("../services/scraper-service");
 router.use(auth);
 
 router.post('/scrape', scraperController.handleSitemapCrawl);
+router.post('/sitemap-crawl-v2', scraperController.handleSitemapCrawlV2);
 router.post('/scrape-url', scraperController.handleSingleUrlCrawl);
 router.get('/status/:activityId', scraperController.checkCrawlStatus); 
 router.get('/get-activities', scraperController.getUserActivities);

@@ -1,0 +1,570 @@
+const cheerio = require("cheerio");
+const { Jenkins } = require("simhash-js");
+const logger = require("../config/logger");
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const SIMHASH_HAMMING_THRESHOLD = 3;
+const SIMHASH_MAX_FEATURES = 128;
+const WORD_SHINGLE_SIZE = 3;
+
+const STORE_MAX_TITLES = 50000;
+const STORE_MAX_DESCRIPTIONS = 50000;
+const STORE_MAX_BUCKET_ENTRIES = 200000;
+
+// ─── Scoring weights ──────────────────────────────────────────────────────────
+const SCORE_PENALTIES = {
+  title: {
+    exact_match: 30,
+    near_exact: 25,
+    high_similarity: 15,
+  },
+  description: {
+    exact_match: 20,
+    near_exact: 15,
+    high_similarity: 10,
+  },
+  content: {
+    exact_match: 40, // similarity >= 0.99
+    near_exact: 25, // similarity >= 0.85
+    high_similarity: 10, // similarity >= 0.70
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+class DuplicateProcessorV2 {
+  constructor() {
+    this.stats = {
+      webpagesAnalyzed: 0,
+      titleDuplicatesFound: 0,
+      descriptionDuplicatesFound: 0,
+      contentDuplicatesFound: 0,
+    };
+  }
+
+  // ─── Public API ─────────────────────────────────────────────────────────────
+
+  /**
+   * TWO-PASS duplicate detection for chunked processing.
+   *
+   * Pass 1 — build a complete signatureStore across ALL chunks (no DB writes).
+   * Pass 2 — re-evaluate every chunk against the complete store and write scores.
+   *
+   * This ensures that a page in chunk 1 correctly detects a duplicate in chunk 5.
+   *
+   * @param {string}   userActivityId
+   * @param {string}   userId
+   * @param {number}   chunkSize
+   * @param {Function} getChunk(skip, limit) → Array<page>
+   * @param {Function} onChunkReady(chunk, duplicateResults) → Promise  (called in pass 2)
+   * @param {number}   totalCount
+   */
+  async runTwoPassAnalysis({
+    userActivityId,
+    userId,
+    chunkSize = 2000,
+    getChunk,
+    onChunkReady,
+    totalCount,
+  }) {
+    logger.info(
+      `Two-pass duplicate analysis: ${totalCount} pages, chunk=${chunkSize}`,
+      userId,
+    );
+
+    // ── Pass 1: build full store ─────────────────────────────────────────────
+    logger.info("Duplicate pass 1: building signature store...", userId);
+    let signatureStore = this._emptyStore();
+
+    for (let skip = 0; skip < totalCount; skip += chunkSize) {
+      try {
+        const chunk = await getChunk(skip, chunkSize);
+        if (!chunk.length) break;
+        const { updatedStore } = this._buildStoreOnly(chunk, signatureStore);
+        signatureStore = updatedStore;
+        logger.debug(
+          `Pass 1 — indexed ${Math.min(skip + chunkSize, totalCount)}/${totalCount}`,
+          userId,
+        );
+      } catch (err) {
+        logger.error(`Pass 1 chunk at skip=${skip} failed`, err, userId);
+      }
+    }
+
+    // ── Pass 2: score against complete store ─────────────────────────────────
+    logger.info("Duplicate pass 2: scoring against complete store...", userId);
+
+    for (let skip = 0; skip < totalCount; skip += chunkSize) {
+      try {
+        const chunk = await getChunk(skip, chunkSize);
+        if (!chunk.length) break;
+
+        const { duplicateResults } = this.findDuplicatesWithStore(
+          chunk,
+          signatureStore,
+        );
+        await onChunkReady(chunk, duplicateResults);
+
+        logger.debug(
+          `Pass 2 — scored ${Math.min(skip + chunkSize, totalCount)}/${totalCount}`,
+          userId,
+        );
+      } catch (err) {
+        logger.error(`Pass 2 chunk at skip=${skip} failed`, err, userId);
+      }
+    }
+
+    logger.info("Two-pass duplicate analysis complete", userId);
+  }
+
+  /**
+   * Incremental duplicate detection (single pass).
+   * Use this only when you want streaming/live results.
+   * For batch SEO scoring, prefer runTwoPassAnalysis().
+   *
+   * @param {Array}  batch          - Array of page objects
+   * @param {Object} signatureStore - carry-over store from previous chunk (or null)
+   * @returns {{ duplicateResults: Map, updatedStore: Object }}
+   */
+  findDuplicatesWithStore(batch, signatureStore = null) {
+    const store = signatureStore || this._emptyStore();
+    const duplicateResults = new Map();
+
+    for (const page of batch) {
+      try {
+        const idStr = page._id.toString();
+        const duplicates = {
+          titleDuplicates: [],
+          descriptionDuplicates: [],
+          contentDuplicates: [],
+        };
+
+        // ── Skip pages that declare a canonical elsewhere ──────────────────
+        if (page.canonicalUrl && page.canonicalUrl !== page.pageUrl) {
+          duplicateResults.set(idStr, {
+            ...duplicates,
+            skippedReason: "has_canonical",
+          });
+          continue;
+        }
+
+        // ── Title ──────────────────────────────────────────────────────────
+        const titleNorm =
+          page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
+
+        if (titleNorm) {
+          const existing = store.titles.get(titleNorm) || [];
+          const others = existing.filter((e) => e._id.toString() !== idStr);
+
+          if (others.length > 0) {
+            duplicates.titleDuplicates = others.map((e) => ({
+              pageUrl: e.pageUrl,
+              title: e.title,
+              duplicateType: "exact_match",
+              similarity: 1.0,
+            }));
+            this.stats.titleDuplicatesFound += others.length;
+          }
+
+          if (store.titles.size < STORE_MAX_TITLES) {
+            existing.push({
+              _id: page._id,
+              pageUrl: page.pageUrl,
+              title: page.title,
+            });
+            store.titles.set(titleNorm, existing);
+          }
+        }
+
+        // ── Meta Description ───────────────────────────────────────────────
+        const descNorm =
+          page.metaDescription?.trim().length > 10
+            ? this.normalizeDescription(page.metaDescription)
+            : "";
+
+        if (descNorm) {
+          const existing = store.descriptions.get(descNorm) || [];
+          const others = existing.filter((e) => e._id.toString() !== idStr);
+
+          if (others.length > 0) {
+            duplicates.descriptionDuplicates = others.map((e) => ({
+              pageUrl: e.pageUrl,
+              description: e.metaDescription,
+              duplicateType: "exact_match",
+              similarity: 1.0,
+            }));
+            this.stats.descriptionDuplicatesFound += others.length;
+          }
+
+          if (store.descriptions.size < STORE_MAX_DESCRIPTIONS) {
+            existing.push({
+              _id: page._id,
+              pageUrl: page.pageUrl,
+              metaDescription: page.metaDescription,
+            });
+            store.descriptions.set(descNorm, existing);
+          }
+        }
+
+        // ── Content (SimHash) ──────────────────────────────────────────────
+        if (page.content?.trim().length > 100) {
+          const cleanText = this.extractCleanTextFromHtml(page.content);
+          const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
+
+          if (shingles.length > 0) {
+            const simhash = this.simhashFromWordShingles(shingles);
+            const bucketKeys = this.getContentSimhashBucketKeys(simhash);
+
+            // seenIds is shared across ALL bucket iterations for this page
+            const seenIds = new Set();
+
+            for (const key of bucketKeys) {
+              const bucket = store.contentSimhashBuckets.get(key) || [];
+
+              for (const entry of bucket) {
+                const entryIdStr = entry._id.toString();
+                if (entryIdStr === idStr || seenIds.has(entryIdStr)) continue;
+                seenIds.add(entryIdStr);
+
+                const dist = this.hammingDistance32(simhash, entry.simhash);
+
+                if (dist <= SIMHASH_HAMMING_THRESHOLD) {
+                  const similarity = parseFloat((1 - dist / 32).toFixed(2));
+                  const duplicateType =
+                    dist === 0
+                      ? "exact_match"
+                      : similarity >= 0.9
+                        ? "near_exact"
+                        : "near_duplicate";
+
+                  duplicates.contentDuplicates.push({
+                    pageUrl: entry.pageUrl,
+                    wordCount: entry.wordCount || 0,
+                    duplicateType,
+                    similarity,
+                  });
+                  this.stats.contentDuplicatesFound += 1;
+                }
+              }
+            }
+
+            // Deduplicate results by pageUrl (safety net for bucket overlaps)
+            duplicates.contentDuplicates = [
+              ...new Map(
+                duplicates.contentDuplicates.map((d) => [d.pageUrl, d]),
+              ).values(),
+            ];
+
+            // Add to buckets if memory guard allows
+            if (store.totalBucketEntries < STORE_MAX_BUCKET_ENTRIES) {
+              const entry = {
+                simhash,
+                _id: page._id,
+                pageUrl: page.pageUrl,
+                wordCount: page.wordCount || 0,
+              };
+              for (const key of bucketKeys) {
+                let bucket = store.contentSimhashBuckets.get(key);
+                if (!bucket) {
+                  bucket = [];
+                  store.contentSimhashBuckets.set(key, bucket);
+                }
+                bucket.push(entry);
+                store.totalBucketEntries += 1;
+              }
+            } else {
+              logger.warn(
+                `SimHash bucket store limit (${STORE_MAX_BUCKET_ENTRIES}) reached — skipping new entry for ${page.pageUrl}`,
+              );
+            }
+          }
+        }
+
+        duplicateResults.set(idStr, duplicates);
+      } catch (pageError) {
+        // One bad page must never crash the whole batch
+        logger.error(
+          `Duplicate detection failed for page ${page?.pageUrl}:`,
+          pageError,
+        );
+        duplicateResults.set(page._id.toString(), {
+          titleDuplicates: [],
+          descriptionDuplicates: [],
+          contentDuplicates: [],
+          error: true,
+        });
+      }
+    }
+
+    return { duplicateResults, updatedStore: store };
+  }
+
+  /**
+   * Calculate a nuanced SEO duplicate score (0–100).
+   * Applies the highest penalty per field (not additive per duplicate).
+   */
+  calculateDuplicateScore(duplicates) {
+    // Skip penalty if page has a canonical declared elsewhere
+    if (duplicates.skippedReason === "has_canonical") return 100;
+
+    let penalty = 0;
+
+    // Title — worst duplicate type wins
+    if (duplicates.titleDuplicates?.length > 0) {
+      const worst = this._worstDuplicateType(duplicates.titleDuplicates);
+      penalty +=
+        SCORE_PENALTIES.title[worst] ?? SCORE_PENALTIES.title.high_similarity;
+    }
+
+    // Description — worst duplicate type wins
+    if (duplicates.descriptionDuplicates?.length > 0) {
+      const worst = this._worstDuplicateType(duplicates.descriptionDuplicates);
+      penalty +=
+        SCORE_PENALTIES.description[worst] ??
+        SCORE_PENALTIES.description.high_similarity;
+    }
+
+    // Content — based on max similarity value
+    if (duplicates.contentDuplicates?.length > 0) {
+      const maxSimilarity = Math.max(
+        ...duplicates.contentDuplicates.map((d) => d.similarity),
+      );
+      if (maxSimilarity >= 0.99) penalty += SCORE_PENALTIES.content.exact_match;
+      else if (maxSimilarity >= 0.85)
+        penalty += SCORE_PENALTIES.content.near_exact;
+      else penalty += SCORE_PENALTIES.content.high_similarity;
+    }
+
+    return Math.max(0, 100 - penalty);
+  }
+
+  // ─── Text Extraction & Normalization ────────────────────────────────────────
+
+  extractCleanTextFromHtml(html) {
+    if (!html || typeof html !== "string") return "";
+    const trimmed = html.trim();
+    if (!trimmed.includes("<") || !trimmed.includes(">")) {
+      return this.normalizeContent(trimmed);
+    }
+    try {
+      const $ = cheerio.load(trimmed);
+      $("nav, footer, header, script, style, noscript, iframe").remove();
+      const text = $("body").length ? $("body").text() : $.text();
+      return this.normalizeContent(text);
+    } catch {
+      return this.normalizeContent(trimmed);
+    }
+  }
+
+  normalizeTitle(title) {
+    if (!title) return "";
+    return title
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\s\-]/g, "")
+      .substring(0, 200);
+  }
+
+  normalizeDescription(description) {
+    if (!description) return "";
+    return description
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\s\-]/g, "")
+      .substring(0, 300);
+  }
+
+  normalizeContent(content) {
+    if (!content) return "";
+    return content
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ");
+  }
+
+  // ─── SimHash Core ────────────────────────────────────────────────────────────
+
+  getWordShingles(text, k = WORD_SHINGLE_SIZE) {
+    if (!text || typeof text !== "string") return [];
+    const words = text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+    const shingles = [];
+    for (let i = 0; i <= words.length - k; i++) {
+      shingles.push(words.slice(i, i + k).join(" "));
+    }
+    return shingles;
+  }
+
+  simhashFromWordShingles(shingles) {
+    if (!shingles?.length) return 0;
+    const jenkins = new Jenkins();
+    const hashes = shingles.map((s) => jenkins.hash32(s));
+    const unique = [...new Set(hashes)].sort();
+    const selected =
+      unique.length > SIMHASH_MAX_FEATURES
+        ? unique.slice(0, SIMHASH_MAX_FEATURES)
+        : unique;
+
+    let simhash = 0;
+    for (let pos = 0; pos < 32; pos++) {
+      const mask = 1 << pos;
+      let weight = 0;
+      for (const h of selected) {
+        const val = parseInt(h, 16) >>> 0;
+        weight += val & mask ? 1 : -1;
+      }
+      if (weight > 0) simhash |= mask;
+    }
+    return simhash >>> 0;
+  }
+
+  getContentSimhashBucketKeys(hash32) {
+    return [
+      hash32 & 0xff,
+      (hash32 >> 8) & 0xff,
+      (hash32 >> 16) & 0xff,
+      (hash32 >> 24) & 0xff,
+    ];
+  }
+
+  hammingDistance32(a, b) {
+    let x = ((a >>> 0) ^ (b >>> 0)) >>> 0;
+    let d = 0;
+    while (x) {
+      d++;
+      x &= x - 1;
+    }
+    return d;
+  }
+
+  // ─── Stats ───────────────────────────────────────────────────────────────────
+
+  getStats() {
+    const total =
+      this.stats.titleDuplicatesFound +
+      this.stats.descriptionDuplicatesFound +
+      this.stats.contentDuplicatesFound;
+
+    return {
+      ...this.stats,
+      avgDuplicatesPerPage:
+        this.stats.webpagesAnalyzed > 0
+          ? (total / this.stats.webpagesAnalyzed).toFixed(2)
+          : 0,
+    };
+  }
+
+  resetStats() {
+    this.stats = {
+      webpagesAnalyzed: 0,
+      titleDuplicatesFound: 0,
+      descriptionDuplicatesFound: 0,
+      contentDuplicatesFound: 0,
+    };
+  }
+
+  // ─── Private Helpers ─────────────────────────────────────────────────────────
+
+  _emptyStore() {
+    return {
+      titles: new Map(),
+      descriptions: new Map(),
+      contentSimhashBuckets: new Map(),
+      totalBucketEntries: 0,
+    };
+  }
+
+  /**
+   * Pass 1 helper — index pages into the store without returning duplicateResults.
+   * Faster than findDuplicatesWithStore because it skips the comparison step.
+   */
+  _buildStoreOnly(batch, signatureStore) {
+    const store = signatureStore || this._emptyStore();
+
+    for (const page of batch) {
+      try {
+        // Skip canonical pages
+        if (page.canonicalUrl && page.canonicalUrl !== page.pageUrl) continue;
+
+        const titleNorm =
+          page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
+        if (titleNorm && store.titles.size < STORE_MAX_TITLES) {
+          const existing = store.titles.get(titleNorm) || [];
+          existing.push({
+            _id: page._id,
+            pageUrl: page.pageUrl,
+            title: page.title,
+          });
+          store.titles.set(titleNorm, existing);
+        }
+
+        const descNorm =
+          page.metaDescription?.trim().length > 10
+            ? this.normalizeDescription(page.metaDescription)
+            : "";
+        if (descNorm && store.descriptions.size < STORE_MAX_DESCRIPTIONS) {
+          const existing = store.descriptions.get(descNorm) || [];
+          existing.push({
+            _id: page._id,
+            pageUrl: page.pageUrl,
+            metaDescription: page.metaDescription,
+          });
+          store.descriptions.set(descNorm, existing);
+        }
+
+        if (page.content?.trim().length > 100) {
+          // const cleanText  = this.extractCleanTextFromHtml(page.content);
+          const shingles = this.getWordShingles(
+            page.content,
+            WORD_SHINGLE_SIZE,
+          );
+          if (
+            shingles.length > 0 &&
+            store.totalBucketEntries < STORE_MAX_BUCKET_ENTRIES
+          ) {
+            const simhash = this.simhashFromWordShingles(shingles);
+            const bucketKeys = this.getContentSimhashBucketKeys(simhash);
+            const entry = {
+              simhash,
+              _id: page._id,
+              pageUrl: page.pageUrl,
+              wordCount: page.wordCount || 0,
+            };
+            for (const key of bucketKeys) {
+              let bucket = store.contentSimhashBuckets.get(key);
+              if (!bucket) {
+                bucket = [];
+                store.contentSimhashBuckets.set(key, bucket);
+              }
+              bucket.push(entry);
+              store.totalBucketEntries += 1;
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(`Pass 1 index error for ${page?.pageUrl}:`, err);
+      }
+    }
+
+    return { updatedStore: store };
+  }
+
+  /**
+   * Returns the single worst duplicate type from a list of duplicate entries.
+   */
+  _worstDuplicateType(entries) {
+    const order = ["exact_match", "near_exact", "high_similarity"];
+    for (const type of order) {
+      if (entries.some((e) => e.duplicateType === type)) return type;
+    }
+    return "high_similarity";
+  }
+}
+
+module.exports = DuplicateProcessorV2;

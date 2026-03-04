@@ -114,7 +114,8 @@ export const startSitemapCrawl = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      const response = await axiosInstance.post("/scraper/scrape", data);
+      // const response = await axiosInstance.post("/scraper/scrape", data);
+      const response = await axiosInstance.post("/scraper/sitemap-crawl-v2", data);
 
       const newActivity: UserActivity = {
         _id: response.data.activityId,

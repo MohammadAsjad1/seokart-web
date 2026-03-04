@@ -21,6 +21,8 @@ const DuplicateProcessor = require("../processors/duplicate-processor");
 const LinkProcessor = require("../processors/link-processor");
 const { UserPlan } = require("../models/userPlan");
 const scrapeQueue = require("../queue/scrapeQueue");
+const crawlV2Phase1Queue = require("../queue/crawlV2Phase1Queue");
+const crawlV2Config = require("../config/crawl-v2");
 const crypto = require("crypto");
 const { emitToUser } = require("../services/socket-emitter");
 
@@ -408,6 +410,195 @@ const webCrawler = async ({
     }
 
     throw new Error(error.message);
+  }
+};
+
+/**
+ * Crawl V2: High-scale sitemap crawl (100K pages, 50–1000 concurrent users).
+ * Two-worker architecture: Phase1 (sitemap + scrape) → Phase2 (analyze).
+ * Existing POST /scrape remains unchanged.
+ */
+const handleSitemapCrawlV2 = async (req, res) => {
+  try {
+    let { websiteUrl, sitemapUrls, concurrency } = req.body;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const userPlan = await UserPlan.findOne({ userId }).select("webCrawler domains").lean();
+    if (!userPlan) {
+      return res.status(404).json({
+        success: false,
+        message: "User plan not found",
+      });
+    }
+
+    const limits = userPlan?.webCrawler?.limits || { pagesPerMonth: 100 };
+    const usage = userPlan?.webCrawler?.usage || { pagesThisMonth: 0 };
+    if (usage.pagesThisMonth >= limits.pagesPerMonth) {
+      return res.status(400).json({
+        success: false,
+        message: "You have reached the maximum number of pages per month",
+      });
+    }
+
+    if (websiteUrl) {
+      websiteUrl = websiteUrl.trim();
+      websiteUrl = websiteUrl.replace(/^(https?:\/\/)?(www\.)?/, "");
+      websiteUrl = `https://${websiteUrl}`;
+    }
+    if (!websiteUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "websiteUrl is required",
+      });
+    }
+
+    const urlValidation = ValidationUtils.validateUrl(websiteUrl);
+    if (!urlValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: urlValidation.errors?.[0] || "Invalid website URL",
+      });
+    }
+    let cleanUrl = urlValidation.normalizedUrl;
+    if (cleanUrl.includes("://www.")) cleanUrl = cleanUrl.replace("://www.", "://");
+
+    let finalSitemapUrls = Array.isArray(sitemapUrls)
+      ? sitemapUrls.filter((u) => u && String(u).trim()).slice(0, crawlV2Config.maxSitemapUrls)
+      : [];
+
+    const siteHash = crypto.createHash("sha256").update(cleanUrl).digest("hex").slice(0, 16);
+    const jobId = `crawlV2_phase1_${userId}_${siteHash}`;
+
+    const existingJob = await crawlV2Phase1Queue.getJob(jobId).catch(() => null);
+    if (existingJob) {
+      const state = await existingJob.getState();
+      if (["waiting", "delayed", "active"].includes(state)) {
+        const activityId = existingJob.data?.activityId;
+        return res.status(200).json({
+          success: true,
+          message: "Crawl V2 already queued for this website",
+          jobId,
+          activityId: activityId || null,
+        });
+      }
+      await existingJob.remove();
+    }
+
+    const validConcurrency = Math.max(5, Math.min(50, parseInt(concurrency, 10) || 20));
+
+    // Reuse existing activity for same user + website (recrawl) instead of creating new
+    let existingActivity = await UserActivity.findOne({ userId, websiteUrl: cleanUrl })
+      .sort({ lastCrawlStarted: -1 });
+    const STALLED_MS = 30000;
+    if (
+      existingActivity &&
+      ["processing", "analyzing"].includes(existingActivity.status)
+    ) {
+      const timeSinceHeartbeat =
+        Date.now() -
+        (existingActivity.lastHeartbeat || existingActivity.lastUpdated || new Date()).getTime();
+      if (timeSinceHeartbeat <= STALLED_MS && !existingActivity.isStalled) {
+        return res.status(200).json({
+          success: false,
+          message: "Crawl already in progress for this website",
+          activityId: existingActivity._id,
+          status: existingActivity.status,
+          progress: existingActivity.progress || 0,
+        });
+      }
+    }
+
+    let userActivity;
+    if (existingActivity) {
+      // Reuse: update existing activity for this recrawl
+      userActivity = existingActivity;
+      userActivity.status = "processing";
+      userActivity.startTime = userActivity.startTime || new Date();
+      userActivity.lastCrawlStarted = new Date();
+      userActivity.lastHeartbeat = new Date();
+      userActivity.progress = 0;
+      userActivity.crawlCount = (userActivity.crawlCount || 0) + 1;
+      userActivity.isSitemapCrawling = 1;
+      userActivity.isWebpageCrawling = 0;
+      userActivity.sitemapCount = finalSitemapUrls.length || 0;
+      userActivity.webpageCount = 0;
+      userActivity.webpagesSuccessful = 0;
+      userActivity.webpagesFailed = 0;
+      userActivity.errorMessages = [];
+      userActivity.concurrency = validConcurrency;
+      userActivity.lastUpdated = new Date();
+      userActivity.fastScrapingCompleted = false;
+      userActivity.slowAnalysisCompleted = false;
+      userActivity.serverInstance = crashRecoveryService.getInstanceId();
+      userActivity.isStalled = false;
+      userActivity.crashRecovered = false;
+      userActivity.endTime = undefined;
+    } else {
+      // New activity
+      userActivity = new UserActivity({
+        userId,
+        websiteUrl: cleanUrl,
+        status: "processing",
+        startTime: new Date(),
+        lastCrawlStarted: new Date(),
+        lastHeartbeat: new Date(),
+        progress: 0,
+        crawlCount: 1,
+        isSitemapCrawling: 1,
+        isWebpageCrawling: 0,
+        sitemapCount: finalSitemapUrls.length || 0,
+        webpageCount: 0,
+        webpagesSuccessful: 0,
+        webpagesFailed: 0,
+        errorMessages: [],
+        concurrency: validConcurrency,
+        lastUpdated: new Date(),
+        fastScrapingCompleted: false,
+        slowAnalysisCompleted: false,
+        serverInstance: crashRecoveryService.getInstanceId(),
+        isStalled: false,
+        crashRecovered: false,
+      });
+    }
+    await userActivity.save();
+
+    await emitUserActivitiesUpdate(userId);
+
+    await crawlV2Phase1Queue.add(
+      "phase1",
+      {
+        activityId: userActivity._id.toString(),
+        websiteUrl: cleanUrl,
+        sitemapUrls: finalSitemapUrls,
+        userId,
+        concurrency: validConcurrency,
+      },
+      { jobId, removeOnComplete: true }
+    );
+
+    emitToUser(userId, "crawl_started", {
+      activityId: userActivity._id,
+      websiteUrl: cleanUrl,
+      status: "processing",
+      crawlVersion: "v2",
+      message: "Crawl V2 started (sitemap + scrape → analysis)",
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(202).json({
+      success: true,
+      message: "Crawl V2 started. Phase1 (sitemap + scrape) queued; Phase2 (analysis) will run after.",
+      activityId: userActivity._id,
+      jobId,
+      websiteUrl: cleanUrl,
+      maxPagesPerCrawl: crawlV2Config.maxPagesPerCrawl,
+    });
+  } catch (error) {
+    logger.error("Crawl V2 start error", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -1444,6 +1635,7 @@ const initializeSocket = (io) => {
 module.exports = {
   handleStopCrawl,
   handleSitemapCrawl,
+  handleSitemapCrawlV2,
   handleSingleUrlCrawl,
   checkCrawlStatus,
   getUserActivities,
@@ -1452,6 +1644,8 @@ module.exports = {
   calculateEstimatedTime,
   calculateProcessingSpeed,
   calculateSuccessRate,
+  getPhaseDescription,
+  getDetailedPhaseInfo,
   webCrawler,
   emitUserActivitiesUpdate,
 };

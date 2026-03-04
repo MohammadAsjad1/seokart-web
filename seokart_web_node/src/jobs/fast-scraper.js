@@ -27,11 +27,15 @@ class FastScraperJob {
     };
   }
 
-  async processWebpages(urls, userId, userActivityId, websiteUrl) {
+  async processWebpages(urls, userId, userActivityId, websiteUrl, options = {}) {
     this.stats.startTime = Date.now();
     this.resetStats();
 
-    logger.info(`Starting fast scraping for ${urls.length} URLs`, userId);
+    const skipGrammarAndScores = options.skipGrammarAndScores === true;
+    logger.info(
+      `Starting fast scraping for ${urls.length} URLs${skipGrammarAndScores ? " (fast: no grammar/scores)" : ""}`,
+      userId
+    );
 
     const batchSize = config.batch_sizes.fast_scrape;
     const totalBatches = Math.ceil(urls.length / batchSize);
@@ -68,7 +72,8 @@ class FastScraperJob {
           batch,
           userId,
           userActivityId,
-          websiteUrl
+          websiteUrl,
+          options
         );
 
         this.stats.successful += batchResults.successful;
@@ -93,6 +98,7 @@ class FastScraperJob {
           `Batch ${batchNumber}/${totalBatches} completed: ${batchResults.successful}/${batch.length} successful`,
           userId
         );
+        console.log(`Batch ${batchNumber}/${totalBatches} completed: ${batchResults.successful}/${batch.length} successful`);
 
         if (i + batchSize < urls.length) {
           const batchDelay = config.batch_delays?.fast_scraper ?? 50;
@@ -204,9 +210,11 @@ class FastScraperJob {
     }
   }
 
-  async processBatch(urls, userId, userActivityId, websiteUrl) {
+  async processBatch(urls, userId, userActivityId, websiteUrl, options = {}) {
     const concurrency = config.concurrency.fast_scraper;
     const limit = this.createConcurrencyLimiter(concurrency);
+    const skipGrammarAndScores = options.skipGrammarAndScores === true;
+    const processOne = skipGrammarAndScores ? this.processUrlFast.bind(this) : this.processUrl.bind(this);
 
     let successful = 0;
     let failed = 0;
@@ -214,12 +222,7 @@ class FastScraperJob {
     const promises = urls.map((url) =>
       limit(async () => {
         try {
-          const result = await this.processUrl(
-            url,
-            userId,
-            userActivityId,
-            websiteUrl
-          );
+          const result = await processOne(url, userId, userActivityId, websiteUrl);
           if (result.success) {
             successful++;
           } else {
@@ -237,6 +240,58 @@ class FastScraperJob {
     await Promise.all(promises);
 
     return { successful, failed };
+  }
+
+  /**
+   * Scrape and save only – no grammar check, no fast scores.
+   * Use when grammar/scores will be run in slow analyzer (e.g. Crawl V2).
+   */
+  async processUrlFast(url, userId, userActivityId, websiteUrl) {
+    try {
+      if (this.scraper.shouldStop) {
+        throw new Error("Scraping stopped by user");
+      }
+
+      const scrapedData = await this.scrapeWebpageViaProxy(url, {
+        timeout: config.timeouts.standard_request,
+      });
+
+      const webpageData = this.prepareWebpageDataMinimal(
+        scrapedData,
+        userId,
+        userActivityId,
+        websiteUrl
+      );
+
+      const savedWebpage = await this.webpageService.upsertWebpage(
+        webpageData,
+        userId,
+        websiteUrl,
+        url
+      );
+
+      if (savedWebpage) {
+        return { success: true, url, webpageId: savedWebpage._id };
+      } else {
+        await this.saveFailedWebpage(
+          url,
+          userId,
+          userActivityId,
+          websiteUrl,
+          "Failed to save to database"
+        );
+        return { success: false, url, error: "Failed to save to database" };
+      }
+    } catch (error) {
+      await this.saveFailedWebpage(
+        url,
+        userId,
+        userActivityId,
+        websiteUrl,
+        error.message
+      );
+      return { success: false, url, error: error.message };
+    }
   }
 
   async processUrl(url, userId, userActivityId, websiteUrl) {
@@ -586,6 +641,94 @@ class FastScraperJob {
         hasGrammarErrors: false,
       },
       grammarScore: Math.round(scores.grammar * 10) / 10,
+
+      titleIssues: this.analyzeTitleIssues(scrapedData.title),
+      metaDescriptionIssues: this.analyzeMetaDescIssues(
+        scrapedData.metaDescription
+      ),
+      contentIssues: this.analyzeContentIssues(
+        scrapedData.content,
+        scrapedData.wordCount
+      ),
+
+      processingMethod: "fast_nodejs_scraper",
+      responseTime: scrapedData.response_time,
+      hasErrors: false,
+      isProcessed: true,
+      processedAt: new Date(),
+
+      duplicates: {
+        titleDuplicates: [],
+        descriptionDuplicates: [],
+        contentDuplicates: [],
+      },
+      duplicateScore: 100,
+      internalBrokenLinks: [],
+      externalBrokenLinks: [],
+      redirectLinks: [],
+      slowAnalysisCompleted: false,
+    };
+  }
+
+  /**
+   * Minimal webpage payload: scrape data only, no grammar check, no fast scores.
+   * Grammar and full score are done in slow analyzer (e.g. Crawl V2).
+   */
+  prepareWebpageDataMinimal(scrapedData, userId, userActivityId, websiteUrl) {
+    return {
+      userId,
+      userActivityId,
+      websiteUrl: scrapedData.websiteUrl || websiteUrl,
+      pageUrl: scrapedData.pageUrl || scrapedData.url,
+      statusCode: scrapedData.statusCode || 200,
+      lastCrawled: new Date(scrapedData.lastCrawled),
+      scrapedAt: new Date(scrapedData.scrapedAt),
+
+      seoScore: 0,
+      seoGrade: "F",
+
+      title: scrapedData.title || "",
+      titleLength: scrapedData.titleLength || 0,
+      titleScore: 0,
+      titleTagCount: scrapedData.titleTagCount || 1,
+
+      metaDescription: scrapedData.metaDescription || "",
+      metaDescriptionLength: scrapedData.metaDescriptionLength || 0,
+      metaDescriptionScore: 0,
+
+      content: scrapedData.content || "",
+      wordCount: scrapedData.wordCount || 0,
+      contentScore: 0,
+
+      headingStructure: scrapedData.headingStructure,
+      headingScore: 0,
+
+      urlScore: 0,
+      urlIssues: this.analyzeUrlIssues(scrapedData.url),
+
+      technicalSeo: scrapedData.technicalSeo,
+      technicalScore: 0,
+
+      images: scrapedData.images,
+      imageScore: 0,
+
+      links: scrapedData.links,
+      linkScore: 0,
+
+      performance: this.estimatePerformance(scrapedData),
+      performanceScore: 0,
+
+      grammarSpelling: {
+        spellingErrors: [],
+        grammarErrors: [],
+        readabilityMetrics: {},
+        readabilityScore: 0,
+        contentQualityScore: 0,
+        totalIssues: 0,
+        hasSpellingErrors: false,
+        hasGrammarErrors: false,
+      },
+      grammarScore: 0,
 
       titleIssues: this.analyzeTitleIssues(scrapedData.title),
       metaDescriptionIssues: this.analyzeMetaDescIssues(

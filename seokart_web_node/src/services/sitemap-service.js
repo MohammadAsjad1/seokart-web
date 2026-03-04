@@ -792,14 +792,16 @@ class SitemapService {
     }
   }
 
-  async processSitemapsAndSaveUrls(sitemapUrls, activityId, userId) {
+  async processSitemapsAndSaveUrls(sitemapUrls, activityId, userId, options = {}) {
     try {
+      const maxUrls = options.maxUrls || 0; // 0 = no cap
       console.log(`\n========================================`);
       console.log(`🚀 [processSitemapsAndSaveUrls] START`);
       console.log(`========================================`);
       console.log(`Activity ID: ${activityId}`);
       console.log(`User ID: ${userId}`);
       console.log(`Input sitemaps (${sitemapUrls.length}):`, sitemapUrls);
+      if (maxUrls > 0) console.log(`Max URLs cap: ${maxUrls}`);
 
       if (!sitemapUrls || sitemapUrls.length === 0) {
         console.error(`❌ [processSitemapsAndSaveUrls] No sitemaps provided`);
@@ -862,10 +864,17 @@ class SitemapService {
         );
       }
 
+      // Cap URLs when maxUrls is set (e.g. V2 crawl 100K limit)
+      let urlsToSave = extractedUrls;
+      if (maxUrls > 0 && extractedUrls.length > maxUrls) {
+        urlsToSave = extractedUrls.slice(0, maxUrls);
+        console.log(`✓ Capped URLs: ${extractedUrls.length} → ${urlsToSave.length}`);
+      }
+
       // Step 3: Save webpage URLs
       console.log(`\n--- STEP 3: Saving webpage URLs to DB ---`);
       const savedUrlCount = await this.saveWebpageUrlsToDb(
-        extractedUrls,
+        urlsToSave,
         activityId,
         userId
       );
@@ -882,10 +891,11 @@ class SitemapService {
 
       return {
         sitemapIds,
-        extractedUrls,
+        extractedUrls: urlsToSave,
         savedUrlCount,
         totalSitemaps: validSitemaps.length,
-        totalUrls: extractedUrls.length,
+        totalUrls: urlsToSave.length,
+        totalExtractedBeforeCap: extractedUrls.length,
         skippedSitemaps: sitemapUrls.length - validSitemaps.length,
       };
     } catch (error) {
