@@ -263,7 +263,7 @@ class LinkProcessor {
     if (REDIRECT_STATUSES.has(status)) {
       return { isBroken: false, isRedirect: true, statusCode: status, redirectTo: headers.location || "" };
     }
-    if (status >= 400) {
+    if (status >= 400 && status !== 403) {
       return { isBroken: true, isRedirect: false, statusCode: status, error: `HTTP ${status}` };
     }
     return { isBroken: false, isRedirect: false, statusCode: status };
