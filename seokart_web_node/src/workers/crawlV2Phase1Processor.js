@@ -162,7 +162,6 @@ module.exports = async function (job) {
       failed: fastResults.failed,
       processingTime: fastResults.totalTime,
     },
-    lastHeartbeat: new Date(),
   });
 
   await crawlV2Phase2Queue.add(
