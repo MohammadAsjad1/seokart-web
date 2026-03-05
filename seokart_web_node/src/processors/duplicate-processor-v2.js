@@ -157,13 +157,17 @@ class DuplicateProcessorV2 {
           const others = existing.filter((e) => e._id.toString() !== idStr);
 
           if (others.length > 0) {
-            duplicates.titleDuplicates = others.map((e) => ({
+            const raw = others.map((e) => ({
               pageUrl: e.pageUrl,
               title: e.title,
               duplicateType: "exact_match",
               similarity: 1.0,
             }));
-            this.stats.titleDuplicatesFound += others.length;
+            // One entry per URL (avoid double when same URL exists in DB twice)
+            duplicates.titleDuplicates = [
+              ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
+            ];
+            this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
           }
 
           if (store.titles.size < STORE_MAX_TITLES) {
@@ -187,13 +191,18 @@ class DuplicateProcessorV2 {
           const others = existing.filter((e) => e._id.toString() !== idStr);
 
           if (others.length > 0) {
-            duplicates.descriptionDuplicates = others.map((e) => ({
+            const raw = others.map((e) => ({
               pageUrl: e.pageUrl,
               description: e.metaDescription,
               duplicateType: "exact_match",
               similarity: 1.0,
             }));
-            this.stats.descriptionDuplicatesFound += others.length;
+            // One entry per URL (avoid double when same URL exists in DB twice)
+            duplicates.descriptionDuplicates = [
+              ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
+            ];
+            this.stats.descriptionDuplicatesFound +=
+              duplicates.descriptionDuplicates.length;
           }
 
           if (store.descriptions.size < STORE_MAX_DESCRIPTIONS) {

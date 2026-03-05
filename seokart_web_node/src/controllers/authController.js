@@ -4,7 +4,7 @@ const { validationResult } = require("express-validator");
 const { OAuth2Client } = require('google-auth-library');
 const { UserPlan } = require('../models/userPlan');
 const RankTrackerService = require("../services/rankTrackerService");
-const { webCrawler } = require("../controllers/scraperController.js");
+const { webCrawler, emitUserActivitiesUpdate } = require("../controllers/scraperController.js");
 const rankTrackerService = new RankTrackerService();
 const backlinkService = require("../services/backlinkService");
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -18,6 +18,11 @@ const {
   CompetitorSuggestion,
 } = require("../models/rankTracker");
 const scrapeQueue = require("../queue/scrapeQueue.js");
+const crawlV2Phase1Queue = require("../queue/crawlV2Phase1Queue.js");
+const { UserActivity } = require("../models/activity-models");
+const ValidationUtils = require("../utils/validation");
+const crypto = require("crypto");
+const crashRecoveryService = require("../services/crash-recovery-service");
 
 
 const extractKeywordsFromDomain = (domain) => {
@@ -277,12 +282,108 @@ exports.completeSetup = async (req, res) => {
     //     crawlErr.message
     //   );
     // }
-    scrapeQueue.add("scrapeQueue", {
-      websiteUrl: getDomainWithProtocol(cleanDomain),
-      userId: user._id,
-      concurrency: 15,
-    });
-    
+
+    // scrapeQueue.add("scrapeQueue", {
+    //   websiteUrl: getDomainWithProtocol(cleanDomain),
+    //   userId: user._id,
+    //   concurrency: 15,
+    // });
+
+    // Queue Crawl V2 Phase1 with a UserActivity so the worker can update progress
+    try {
+      const websiteUrl = getDomainWithProtocol(cleanDomain);
+      const urlValidation = ValidationUtils.validateUrl(websiteUrl);
+      if (urlValidation.isValid) {
+        let cleanUrl = urlValidation.normalizedUrl;
+        if (cleanUrl.includes("://www.")) cleanUrl = cleanUrl.replace("://www.", "://");
+
+        const siteHash = crypto.createHash("sha256").update(cleanUrl).digest("hex").slice(0, 16);
+        const jobId = `crawlV2_phase1_${user._id}_${siteHash}`;
+        let alreadyQueued = false;
+        const existingJob = await crawlV2Phase1Queue.getJob(jobId).catch(() => null);
+        if (existingJob) {
+          const state = await existingJob.getState();
+          if (["waiting", "delayed", "active"].includes(state)) {
+            alreadyQueued = true;
+          } else {
+            await existingJob.remove();
+          }
+        }
+
+        if (!alreadyQueued) {
+          const concurrency = 15;
+          let existingActivity = await UserActivity.findOne({ userId: user._id, websiteUrl: cleanUrl })
+            .sort({ lastCrawlStarted: -1 });
+          let userActivity;
+          if (existingActivity) {
+            userActivity = existingActivity;
+            userActivity.status = "processing";
+            userActivity.startTime = userActivity.startTime || new Date();
+            userActivity.lastCrawlStarted = new Date();
+            userActivity.lastHeartbeat = new Date();
+            userActivity.progress = 0;
+            userActivity.crawlCount = (userActivity.crawlCount || 0) + 1;
+            userActivity.isSitemapCrawling = 1;
+            userActivity.isWebpageCrawling = 0;
+            userActivity.sitemapCount = 0;
+            userActivity.webpageCount = 0;
+            userActivity.webpagesSuccessful = 0;
+            userActivity.webpagesFailed = 0;
+            userActivity.errorMessages = [];
+            userActivity.concurrency = concurrency;
+            userActivity.lastUpdated = new Date();
+            userActivity.fastScrapingCompleted = false;
+            userActivity.slowAnalysisCompleted = false;
+            userActivity.serverInstance = crashRecoveryService.getInstanceId();
+            userActivity.isStalled = false;
+            userActivity.crashRecovered = false;
+            userActivity.endTime = undefined;
+          } else {
+            userActivity = new UserActivity({
+              userId: user._id,
+              websiteUrl: cleanUrl,
+              status: "processing",
+              startTime: new Date(),
+              lastCrawlStarted: new Date(),
+              lastHeartbeat: new Date(),
+              progress: 0,
+              crawlCount: 1,
+              isSitemapCrawling: 1,
+              isWebpageCrawling: 0,
+              sitemapCount: 0,
+              webpageCount: 0,
+              webpagesSuccessful: 0,
+              webpagesFailed: 0,
+              errorMessages: [],
+              concurrency,
+              lastUpdated: new Date(),
+              fastScrapingCompleted: false,
+              slowAnalysisCompleted: false,
+              serverInstance: crashRecoveryService.getInstanceId(),
+              isStalled: false,
+              crashRecovered: false,
+            });
+          }
+          await userActivity.save();
+          if (typeof emitUserActivitiesUpdate === "function") {
+            await emitUserActivitiesUpdate(user._id);
+          }
+          await crawlV2Phase1Queue.add(
+            "phase1",
+            {
+              activityId: userActivity._id.toString(),
+              websiteUrl: cleanUrl,
+              sitemapUrls: [],
+              userId: user._id,
+              concurrency,
+            },
+            { jobId, removeOnComplete: true }
+          );
+        }
+      }
+    } catch (crawlErr) {
+      console.warn("[REGISTER] Crawl V2 queue failed:", crawlErr?.message || crawlErr);
+    }
 
     res.status(200).json({
       success: true,
