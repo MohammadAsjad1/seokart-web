@@ -7,16 +7,16 @@ const RateLimiter = require("./rate-limiter");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const RAW_PROXIES = [
-  "198.23.239.134:6540:muxhrzvr:th23dyu55sh3",
-  "45.38.107.97:6014:muxhrzvr:th23dyu55sh3",
-  "107.172.163.27:6543:muxhrzvr:th23dyu55sh3",
-  "64.137.96.74:6641:muxhrzvr:th23dyu55sh3",
-  "216.10.27.159:6837:muxhrzvr:th23dyu55sh3",
-  "142.111.67.146:5611:muxhrzvr:th23dyu55sh3",
-  "142.147.128.93:6593:muxhrzvr:th23dyu55sh3",
-  "142.111.48.253:7030:muxhrzvr:th23dyu55sh3",
-  "31.59.20.176:6754:muxhrzvr:th23dyu55sh3",
-  "38.170.176.177:5572:muxhrzvr:th23dyu55sh3",
+  "31.59.20.176:6754:rbakcvtn:vm589pwpk6we",
+  "23.95.150.145:6114:rbakcvtn:vm589pwpk6we",
+  "198.23.239.134:6540:rbakcvtn:vm589pwpk6we",
+  "45.38.107.97:6014:rbakcvtn:vm589pwpk6we",
+  "107.172.163.27:6543:rbakcvtn:vm589pwpk6we",
+  "198.105.121.200:6462:rbakcvtn:vm589pwpk6we",
+  "64.137.96.74:6641:rbakcvtn:vm589pwpk6we",  
+  "216.10.27.159:6837:rbakcvtn:vm589pwpk6we",
+  "142.111.67.146:5611:rbakcvtn:vm589pwpk6we",  
+  "194.39.32.164:6461:rbakcvtn:vm589pwpk6we",
 ];
 
 const PROXIES = RAW_PROXIES.map((p) => {
@@ -263,9 +263,9 @@ class WebScraper {
           responseType: "text",
           validateStatus: (status) => status < 500,
           maxContentLength: 10 * 1024 * 1024,
-          // httpsAgent: agent,
-          // httpAgent: agent,
-          // proxy: false,
+          httpsAgent: agent,
+          httpAgent: agent,
+          proxy: false,
           headers: {
             "User-Agent": userAgent,
             Accept:
