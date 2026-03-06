@@ -24,7 +24,7 @@ module.exports = {
 
   /** Chunk size for Phase2 analysis (duplicate/link/score) */
   phase2ChunkSize:
-    parseInt(process.env.CRAWL_V2_PHASE2_CHUNK_SIZE, 10) || 2000,
+    parseInt(process.env.CRAWL_V2_PHASE2_CHUNK_SIZE, 10) || 1000,
 
   /** Phase1 worker concurrency (jobs at a time per process) */
   phase1WorkerConcurrency:

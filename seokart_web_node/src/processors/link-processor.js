@@ -38,7 +38,7 @@ class LinkProcessor {
       let links = await this.extractLinksFromWebpage(webpage, pageUrl);
       let endTime = Date.now();
       let duration = endTime - startTime;
-      logger.info(`🔍 Link extraction time: ${duration}ms`);
+      logger.debug(`🔍 Link extraction time: ${duration}ms`);
       if (!links || links.length === 0) {
         logger.warn(`⚠️  No links found on: ${pageUrl}`);
         return {
@@ -64,13 +64,12 @@ class LinkProcessor {
       );
       endTime = Date.now();
       duration = endTime - startTime;
-      logger.info(`🔍 Link validation time: ${duration}ms`);
-        // console.timeEnd("validateLinksWithRateLimit");
+      logger.debug(`🔍 Link validation time: ${duration}ms`);
       logger.info(
-        `✅ Link validation complete for ${pageUrl}:\n` +
-        `   - ${results.internalBrokenLinks.length} internal broken\n` +
-        `   - ${results.externalBrokenLinks.length} external broken\n` +
-        `   - ${results.redirectLinks.length} redirects`
+        `✅ Link validation complete for ${pageUrl}: ` +
+          `${results.internalBrokenLinks.length} internal broken, ` +
+          `${results.externalBrokenLinks.length} external broken, ` +
+          `${results.redirectLinks.length} redirects`,
       );
 
       return results;
@@ -175,7 +174,11 @@ class LinkProcessor {
     const externalBrokenLinks = [];
     const redirectLinks = [];
   
-    const limit = pLimit(config.concurrency?.link_checks_per_page ?? 40);
+    const perPageConcurrency =
+      config.concurrency?.link_checks_per_page != null
+        ? config.concurrency.link_checks_per_page
+        : 40;
+    const limit = pLimit(perPageConcurrency);
   
     await Promise.allSettled(
       links.map(link =>
@@ -286,6 +289,17 @@ class LinkProcessor {
   }
 
   async checkLinkStatus(url, timeout) {
+    // Fast path: if we already know this domain is dead, do not waste more requests.
+    const cachedDead = this._isDomainDead(url);
+    if (cachedDead === true) {
+      return {
+        isBroken: true,
+        isRedirect: false,
+        statusCode: 0,
+        error: "Domain previously unreachable (cached)",
+      };
+    }
+
     const baseConfig = {
       timeout,
       maxRedirects: 0,
@@ -295,16 +309,30 @@ class LinkProcessor {
   
     try {
       const response = await axios.head(url, baseConfig);
-      return this.parseResponse(response);
+      const parsed = this.parseResponse(response);
+      // Only mark as alive on a non-error, non-redirect response
+      if (!parsed.isBroken && !parsed.isRedirect) {
+        this._markDomain(url, false);
+      }
+      return parsed;
     } catch {
       // HEAD not supported by server, fall back to GET
     }
-  
+
     try {
-      const response = await axios.get(url, { ...baseConfig, responseType: "stream" });
+      const response = await axios.get(url, {
+        ...baseConfig,
+        responseType: "stream",
+      });
       response.data.destroy();
-      return this.parseResponse(response);
+      const parsed = this.parseResponse(response);
+      if (!parsed.isBroken && !parsed.isRedirect) {
+        this._markDomain(url, false);
+      }
+      return parsed;
     } catch (err) {
+      // Treat repeated connection-level failures as a dead domain for a short TTL window
+      this._markDomain(url, true);
       return {
         isBroken: true,
         isRedirect: false,

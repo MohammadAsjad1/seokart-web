@@ -27,7 +27,7 @@ class SlowAnalyzerJobV2 {
     this.activityService = new ActivityService();
 
     // ─── Constants ────────────────────────────────────────────────────────────────
-    this.DEFAULT_CHUNK_SIZE = 2000;
+    this.DEFAULT_CHUNK_SIZE = 1000;
     this.DEFAULT_DB_BATCH_SIZE = 100; // bulkWrite ops per round-trip
     this.MAX_RETRIES = 2;
     this.RETRY_BASE_DELAY_MS = 500;
@@ -563,7 +563,7 @@ class SlowAnalyzerJobV2 {
         try {
           await Promise.all([
             this.runGrammarCheckChunk(chunk, userId, userActivityId),
-            this.validateLinksChunk(chunk, userId, userActivityId),
+            this.validateLinksChunk(chunk, userId, userActivityId, totalCount),
           ]);
           await this.recalculateScoresChunk(chunk, userId, userActivityId);
         } catch (err) {
@@ -690,7 +690,7 @@ class SlowAnalyzerJobV2 {
     }
   }
 
-  async validateLinksChunk(chunk, userId, userActivityId) {
+  async validateLinksChunk(chunk, userId, userActivityId, totalCount) {
     const batchSize = config.batch_sizes.link_validation || 30;
     const concurrency =
       config.concurrency.link_validation ||
@@ -699,32 +699,83 @@ class SlowAnalyzerJobV2 {
     const limit = this.createConcurrencyLimiter(concurrency);
     for (let i = 0; i < chunk.length; i += batchSize) {
       const batch = chunk.slice(i, i + batchSize);
-      await Promise.all(
+      const completeMap = await this.getCompleteWebpageDataBatch(
+        batch.map((w) => w._id),
+      );
+      const outcomes = await Promise.allSettled(
         batch.map((webpage) =>
           limit(async () => {
-            const completeWebpage = await this.getCompleteWebpageData(
-              webpage._id,
-            );
+            const completeWebpage =
+              completeMap.get(String(webpage._id)) ?? null;
+            const emptyResult = {
+              internalBrokenLinks: [],
+              externalBrokenLinks: [],
+              redirectLinks: [],
+            };
             if (!completeWebpage) {
-              await this.updateWebpageWithLinks(webpage._id, {
-                internalBrokenLinks: [],
-                externalBrokenLinks: [],
-                redirectLinks: [],
-              });
-              return;
+              return { webpageId: webpage._id, linkResults: emptyResult };
             }
             const linkResults =
               await this.linkProcessor.validatePageLinks(completeWebpage);
-            await this.updateWebpageWithLinks(webpage._id, linkResults);
-            this.stats.internalBrokenLinksFound +=
-              linkResults.internalBrokenLinks?.length || 0;
-            this.stats.externalBrokenLinksFound +=
-              linkResults.externalBrokenLinks?.length || 0;
-            this.stats.redirectLinksFound +=
-              linkResults.redirectLinks?.length || 0;
+            return { webpageId: webpage._id, linkResults };
           }),
         ),
       );
+      const updates = outcomes
+        .filter((o) => o.status === "fulfilled" && o.value != null)
+        .map((o) => o.value);
+      updates.forEach(({ linkResults }) => {
+        this.stats.internalBrokenLinksFound +=
+          linkResults.internalBrokenLinks?.length || 0;
+        this.stats.externalBrokenLinksFound +=
+          linkResults.externalBrokenLinks?.length || 0;
+        this.stats.redirectLinksFound +=
+          linkResults.redirectLinks?.length || 0;
+      });
+      if (updates.length > 0) {
+        await this.bulkUpdateWebpageLinks(updates);
+      }
+      logger.debug("Links validated for chunk batch", {
+        userId,
+        batchSize: batch.length,
+        totalInChunk: chunk.length,
+        totalCount,
+      });
+    }
+  }
+
+  /**
+   * Bulk write link validation results to WebpageTechnical in one round-trip.
+   * @param {Array<{ webpageId: ObjectId, linkResults: { internalBrokenLinks, externalBrokenLinks, redirectLinks } }>} updates
+   */
+  async bulkUpdateWebpageLinks(updates) {
+    if (!updates?.length) return;
+    try {
+      const ops = updates.map(({ webpageId, linkResults }) => {
+        const internal = linkResults.internalBrokenLinks || [];
+        const external = linkResults.externalBrokenLinks || [];
+        const redirects = linkResults.redirectLinks || [];
+        return {
+          updateOne: {
+            filter: { webpageCoreId: webpageId },
+            update: {
+              $set: {
+                internalBrokenLinks: internal,
+                externalBrokenLinks: external,
+                redirectLinks: redirects,
+                "links.internalBrokenLinksCount": internal.length,
+                "links.externalBrokenLinksCount": external.length,
+                "links.redirectLinksCount": redirects.length,
+                updatedAt: new Date(),
+              },
+            },
+          },
+        };
+      });
+      await WebpageTechnical.bulkWrite(ops, { ordered: false });
+    } catch (error) {
+      logger.error("Error bulk updating webpage links:", error);
+      throw error;
     }
   }
 
@@ -1065,6 +1116,42 @@ class SlowAnalyzerJobV2 {
         error,
       );
       return null;
+    }
+  }
+
+  /**
+   * Load complete webpage data for a batch of IDs in one DB round-trip.
+   * Used by validateLinksChunk (and optionally grammar/score chunks) to avoid N separate queries.
+   *
+   * @param {Array<ObjectId>} webpageIds
+   * @returns {Promise<Map<string, Object>>} Map of String(_id) -> completeWebpage
+   */
+  async getCompleteWebpageDataBatch(webpageIds = []) {
+    if (!Array.isArray(webpageIds) || webpageIds.length === 0) {
+      return new Map();
+    }
+    try {
+      const webpageCores = await WebpageCore.find({ _id: { $in: webpageIds } })
+        .populate("technicalId")
+        .lean();
+
+      const result = new Map();
+      for (const d of webpageCores) {
+        result.set(String(d._id), {
+          ...d,
+          technicalSeo: d.technicalId?.technicalSeo,
+          links: d.technicalId?.links,
+          internalBrokenLinks: d.technicalId?.internalBrokenLinks ?? [],
+          externalBrokenLinks: d.technicalId?.externalBrokenLinks ?? [],
+          redirectLinks: d.technicalId?.redirectLinks ?? [],
+          performance: d.technicalId?.performance,
+          technical: d.technicalId,
+        });
+      }
+      return result;
+    } catch (error) {
+      logger.error("Error fetching complete webpage data batch:", error);
+      return new Map();
     }
   }
 

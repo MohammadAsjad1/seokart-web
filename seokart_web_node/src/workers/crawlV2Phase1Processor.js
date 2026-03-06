@@ -109,7 +109,12 @@ module.exports = async function (job) {
     { skipGrammarAndScores: true },
   );
 
-  if (fastScraperJob.scraper.shouldStop || fastResults.stopped) {
+  const shouldStop =
+    fastScraperJob.scraper.shouldStop ||
+    fastResults.stopped ||
+    fastResults.successful === 0;
+
+  if (shouldStop) {
     await UserActivity.findByIdAndUpdate(activityId, {
       status: "stopped",
       endTime: new Date(),
@@ -132,7 +137,7 @@ module.exports = async function (job) {
       totalUrls: allUrls.length,
       successful: fastResults.successful,
       failed: fastResults.failed,
-      stoppedByUser: true,
+      stoppedByUser: fastResults.stopped || fastScraperJob.scraper.shouldStop,
       phase2Queued: false,
       timestamp: new Date().toISOString(),
     });
