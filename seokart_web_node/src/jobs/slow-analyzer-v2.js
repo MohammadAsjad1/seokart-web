@@ -561,7 +561,7 @@ class SlowAnalyzerJobV2 {
 
         // ── Parallel checks ───────────────────────────────────────────
         try {
-          await Promise.all([
+          await Promise.allSettled([
             this.runGrammarCheckChunk(chunk, userId, userActivityId),
             this.validateLinksChunk(chunk, userId, userActivityId, totalCount),
           ]);

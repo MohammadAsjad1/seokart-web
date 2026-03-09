@@ -3,9 +3,11 @@ const { Jenkins } = require("simhash-js");
 const logger = require("../config/logger");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const SIMHASH_HAMMING_THRESHOLD = 3;
+const SIMHASH_HAMMING_THRESHOLD = 3; // 64-bit: only ~95%+ match (1 - 3/64). Stricter to avoid false duplicates.
 const SIMHASH_MAX_FEATURES = 128;
 const WORD_SHINGLE_SIZE = 3;
+const SIMHASH_BITS = 64;
+const JENKINS_SALT_HIGH = "\x01"; // salt for high 32 bits of 64-bit shingle hash
 
 const STORE_MAX_TITLES = 50000;
 const STORE_MAX_DESCRIPTIONS = 50000;
@@ -167,7 +169,8 @@ class DuplicateProcessorV2 {
             duplicates.titleDuplicates = [
               ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
             ];
-            this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
+            this.stats.titleDuplicatesFound +=
+              duplicates.titleDuplicates.length;
           }
 
           if (store.titles.size < STORE_MAX_TITLES) {
@@ -217,8 +220,11 @@ class DuplicateProcessorV2 {
 
         // ── Content (SimHash) ──────────────────────────────────────────────
         if (page.content?.trim().length > 100) {
-          const cleanText = this.extractCleanTextFromHtml(page.content);
-          const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
+          // const cleanText = this.extractCleanTextFromHtml(page.content);
+          const shingles = this.getWordShingles(
+            page.content,
+            WORD_SHINGLE_SIZE,
+          );
 
           if (shingles.length > 0) {
             const simhash = this.simhashFromWordShingles(shingles);
@@ -235,16 +241,21 @@ class DuplicateProcessorV2 {
                 if (entryIdStr === idStr || seenIds.has(entryIdStr)) continue;
                 seenIds.add(entryIdStr);
 
-                const dist = this.hammingDistance32(simhash, entry.simhash);
+                const dist = this.hammingDistance64(simhash, entry.simhash);
 
                 if (dist <= SIMHASH_HAMMING_THRESHOLD) {
-                  const similarity = parseFloat((1 - dist / 32).toFixed(2));
-                  const duplicateType =
-                    dist === 0
-                      ? "exact_match"
-                      : similarity >= 0.9
-                        ? "near_exact"
-                        : "near_duplicate";
+                  // Change these thresholds in findDuplicatesWithStore
+                  const similarity = parseFloat((1 - dist / 64).toFixed(3));
+
+                  let duplicateType;
+                  if (dist === 0) {
+                    duplicateType = "exact_match";
+                  } else if (dist <= 3) {
+                    // This is roughly 95% similarity
+                    duplicateType = "near_exact";
+                  } else {
+                    duplicateType = "near_duplicate"; // Distances 4, 5, 6
+                  }
 
                   duplicates.contentDuplicates.push({
                     pageUrl: entry.pageUrl,
@@ -410,44 +421,68 @@ class DuplicateProcessorV2 {
     return shingles;
   }
 
+  /**
+   * 64-bit SimHash from word shingles using Jenkins hash (two hashes per shingle for 64 bits).
+   * @param {string[]} shingles
+   * @returns {bigint} 64-bit SimHash as BigInt
+   */
   simhashFromWordShingles(shingles) {
-    if (!shingles?.length) return 0;
+    if (!shingles?.length) return 0n;
     const jenkins = new Jenkins();
-    const hashes = shingles.map((s) => jenkins.hash32(s));
-    const unique = [...new Set(hashes)].sort();
+    const hashes = shingles.map((s) => {
+      // Jenkins.hash32() returns hex string; parse to 32-bit unsigned for 64-bit combine
+      const low = parseInt(jenkins.hash32(s), 16) >>> 0;
+      const high = parseInt(jenkins.hash32(s + JENKINS_SALT_HIGH), 16) >>> 0;
+      return (BigInt(high) << 32n) | BigInt(low);
+    });
+    const unique = [...new Set(hashes)].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
     const selected =
       unique.length > SIMHASH_MAX_FEATURES
         ? unique.slice(0, SIMHASH_MAX_FEATURES)
         : unique;
 
-    let simhash = 0;
-    for (let pos = 0; pos < 32; pos++) {
-      const mask = 1 << pos;
+    let simhash = 0n;
+    for (let pos = 0; pos < SIMHASH_BITS; pos++) {
+      const mask = 1n << BigInt(pos);
       let weight = 0;
       for (const h of selected) {
-        const val = parseInt(h, 16) >>> 0;
-        weight += val & mask ? 1 : -1;
+        weight += (h & mask) !== 0n ? 1 : -1;
       }
       if (weight > 0) simhash |= mask;
     }
-    return simhash >>> 0;
+    return simhash;
   }
 
-  getContentSimhashBucketKeys(hash32) {
-    return [
-      hash32 & 0xff,
-      (hash32 >> 8) & 0xff,
-      (hash32 >> 16) & 0xff,
-      (hash32 >> 24) & 0xff,
-    ];
+  /**
+   * 8 bands of 8 bits each for 64-bit SimHash LSH bucketing.
+   * Keys are bandIndex * 256 + value so bands do not collide.
+   * @param {bigint} hash64
+   * @returns {number[]} 8 bucket keys
+   */
+  getContentSimhashBucketKeys(hash64) {
+    const keys = [];
+    for (let band = 0; band < 8; band++) {
+      const shift = BigInt(band * 8);
+      const value = Number((hash64 >> shift) & 0xffn);
+      keys.push(band * 256 + value);
+    }
+    return keys;
   }
 
-  hammingDistance32(a, b) {
-    let x = ((a >>> 0) ^ (b >>> 0)) >>> 0;
+  /**
+   * Hamming distance between two 64-bit SimHashes (BigInt).
+   * @param {bigint} a
+   * @param {bigint} b
+   * @returns {number}
+   */
+  hammingDistance64(a, b) {
+    let x = (a ^ b) & 0xffffffffffffffffn;
     let d = 0;
-    while (x) {
+    while (x !== 0n) {
       d++;
-      x &= x - 1;
+      x &= x - 1n;
     }
     return d;
   }
@@ -528,7 +563,7 @@ class DuplicateProcessorV2 {
         }
 
         if (page.content?.trim().length > 100) {
-          // const cleanText  = this.extractCleanTextFromHtml(page.content);
+          // const cleanText = this.extractCleanTextFromHtml(page.content);
           const shingles = this.getWordShingles(
             page.content,
             WORD_SHINGLE_SIZE,
