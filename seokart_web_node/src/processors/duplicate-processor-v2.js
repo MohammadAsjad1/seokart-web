@@ -13,6 +13,8 @@ const STORE_MAX_TITLES = 50000;
 const STORE_MAX_DESCRIPTIONS = 50000;
 const STORE_MAX_BUCKET_ENTRIES = 200000;
 
+const REDIS_KEY_PREFIX = "dup";
+
 // ─── Scoring weights ──────────────────────────────────────────────────────────
 const SCORE_PENALTIES = {
   title: {
@@ -35,12 +37,35 @@ const SCORE_PENALTIES = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DuplicateProcessorV2 {
-  constructor() {
+  constructor(options = {}) {
+    this.redis = options.redis ?? null;
     this.stats = {
       webpagesAnalyzed: 0,
       titleDuplicatesFound: 0,
       descriptionDuplicatesFound: 0,
       contentDuplicatesFound: 0,
+    };
+  }
+
+  /** Redis key prefix for a run: dup:{userActivityId}: */
+  _prefix(userActivityId) {
+    return `${REDIS_KEY_PREFIX}:${userActivityId}:`;
+  }
+
+  /** Normalize Redis client (supports ioredis lowercase or node-redis v4 camelCase). Bind to client so ioredis receives correct `this`. */
+  _redis(store) {
+    if (!store?.redis) return null;
+    const r = store.redis;
+    return {
+      hGet: (r.hGet ?? r.hget).bind(r),
+      hSet: (r.hSet ?? r.hset).bind(r),
+      hLen: (r.hLen ?? r.hlen).bind(r),
+      sAdd: (r.sAdd ?? r.sadd).bind(r),
+      sMembers: (r.sMembers ?? r.smembers).bind(r),
+      get: r.get.bind(r),
+      incrBy: (r.incrBy ?? r.incrby).bind(r),
+      scan: r.scan.bind(r),
+      del: r.del.bind(r),
     };
   }
 
@@ -76,13 +101,14 @@ class DuplicateProcessorV2 {
 
     // ── Pass 1: build full store ─────────────────────────────────────────────
     logger.info("Duplicate pass 1: building signature store...", userId);
-    let signatureStore = this._emptyStore();
+    let signatureStore = this._emptyStore(userActivityId);
+    await this._clearRedisStore(signatureStore);
 
     for (let skip = 0; skip < totalCount; skip += chunkSize) {
       try {
         const chunk = await getChunk(skip, chunkSize);
         if (!chunk.length) break;
-        const { updatedStore } = this._buildStoreOnly(chunk, signatureStore);
+        const { updatedStore } = await this._buildStoreOnly(chunk, signatureStore);
         signatureStore = updatedStore;
         logger.debug(
           `Pass 1 — indexed ${Math.min(skip + chunkSize, totalCount)}/${totalCount}`,
@@ -101,7 +127,7 @@ class DuplicateProcessorV2 {
         const chunk = await getChunk(skip, chunkSize);
         if (!chunk.length) break;
 
-        const { duplicateResults } = this.findDuplicatesWithStore(
+        const { duplicateResults } = await this.findDuplicatesWithStore(
           chunk,
           signatureStore,
         );
@@ -126,11 +152,13 @@ class DuplicateProcessorV2 {
    *
    * @param {Array}  batch          - Array of page objects
    * @param {Object} signatureStore - carry-over store from previous chunk (or null)
-   * @returns {{ duplicateResults: Map, updatedStore: Object }}
+   * @returns {Promise<{ duplicateResults: Map, updatedStore: Object }>}
    */
-  findDuplicatesWithStore(batch, signatureStore = null) {
-    const store = signatureStore || this._emptyStore();
+  async findDuplicatesWithStore(batch, signatureStore = null) {
+    const store = signatureStore || this._emptyStore(null);
     const duplicateResults = new Map();
+    const redis = this._redis(store);
+    const prefix = store.userActivityId != null ? this._prefix(store.userActivityId) : null;
 
     for (const page of batch) {
       try {
@@ -155,8 +183,21 @@ class DuplicateProcessorV2 {
           page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
 
         if (titleNorm) {
-          const existing = store.titles.get(titleNorm) || [];
-          const others = existing.filter((e) => e._id.toString() !== idStr);
+          let existing = [];
+          if (redis) {
+            const raw = await redis.hGet(prefix + "titles", titleNorm);
+            if (raw) {
+              try {
+                existing = JSON.parse(raw);
+              } catch (_) {
+                existing = [];
+              }
+            }
+          } else {
+            existing = store.titles.get(titleNorm) || [];
+          }
+
+          const others = existing.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
 
           if (others.length > 0) {
             const raw = others.map((e) => ({
@@ -165,21 +206,23 @@ class DuplicateProcessorV2 {
               duplicateType: "exact_match",
               similarity: 1.0,
             }));
-            // One entry per URL (avoid double when same URL exists in DB twice)
             duplicates.titleDuplicates = [
               ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
             ];
-            this.stats.titleDuplicatesFound +=
-              duplicates.titleDuplicates.length;
+            this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
           }
 
-          if (store.titles.size < STORE_MAX_TITLES) {
-            existing.push({
-              _id: page._id,
-              pageUrl: page.pageUrl,
-              title: page.title,
-            });
-            store.titles.set(titleNorm, existing);
+          const titleCount = redis
+            ? await redis.hLen(prefix + "titles")
+            : store.titles.size;
+          if (titleCount < STORE_MAX_TITLES) {
+            const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
+            existing.push(newEntry);
+            if (redis) {
+              await redis.hSet(prefix + "titles", titleNorm, JSON.stringify(existing));
+            } else {
+              store.titles.set(titleNorm, existing);
+            }
           }
         }
 
@@ -190,8 +233,21 @@ class DuplicateProcessorV2 {
             : "";
 
         if (descNorm) {
-          const existing = store.descriptions.get(descNorm) || [];
-          const others = existing.filter((e) => e._id.toString() !== idStr);
+          let existing = [];
+          if (redis) {
+            const raw = await redis.hGet(prefix + "descriptions", descNorm);
+            if (raw) {
+              try {
+                existing = JSON.parse(raw);
+              } catch (_) {
+                existing = [];
+              }
+            }
+          } else {
+            existing = store.descriptions.get(descNorm) || [];
+          }
+
+          const others = existing.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
 
           if (others.length > 0) {
             const raw = others.map((e) => ({
@@ -200,7 +256,6 @@ class DuplicateProcessorV2 {
               duplicateType: "exact_match",
               similarity: 1.0,
             }));
-            // One entry per URL (avoid double when same URL exists in DB twice)
             duplicates.descriptionDuplicates = [
               ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
             ];
@@ -208,44 +263,61 @@ class DuplicateProcessorV2 {
               duplicates.descriptionDuplicates.length;
           }
 
-          if (store.descriptions.size < STORE_MAX_DESCRIPTIONS) {
-            existing.push({
-              _id: page._id,
-              pageUrl: page.pageUrl,
-              metaDescription: page.metaDescription,
-            });
-            store.descriptions.set(descNorm, existing);
+          const descCount = redis
+            ? await redis.hLen(prefix + "descriptions")
+            : store.descriptions.size;
+          if (descCount < STORE_MAX_DESCRIPTIONS) {
+            const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
+            existing.push(newEntry);
+            if (redis) {
+              await redis.hSet(prefix + "descriptions", descNorm, JSON.stringify(existing));
+            } else {
+              store.descriptions.set(descNorm, existing);
+            }
           }
         }
 
         // ── Content (SimHash) ──────────────────────────────────────────────
         if (page.content?.trim().length > 100) {
-          // const cleanText = this.extractCleanTextFromHtml(page.content);
-          const shingles = this.getWordShingles(
-            page.content,
-            WORD_SHINGLE_SIZE,
-          );
+          const cleanText = this.extractCleanTextFromHtml(page.content);
+          const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
 
           if (shingles.length > 0) {
             const simhash = this.simhashFromWordShingles(shingles);
             const bucketKeys = this.getContentSimhashBucketKeys(simhash);
 
-            // seenIds is shared across ALL bucket iterations for this page
             const seenIds = new Set();
 
             for (const key of bucketKeys) {
-              const bucket = store.contentSimhashBuckets.get(key) || [];
+              let bucket = [];
+              if (redis) {
+                const bucketKey = prefix + "b:" + key;
+                const members = await redis.sMembers(bucketKey);
+                bucket = members.map((m) => {
+                  try {
+                    const o = JSON.parse(m);
+                    return {
+                      ...o,
+                      simhash: BigInt(o.simhash),
+                    };
+                  } catch (_) {
+                    return null;
+                  }
+                }).filter(Boolean);
+              } else {
+                bucket = store.contentSimhashBuckets.get(key) || [];
+              }
 
               for (const entry of bucket) {
-                const entryIdStr = entry._id.toString();
+                const entryIdStr = (entry._id || entry._idStr)?.toString?.() ?? entry._id;
                 if (entryIdStr === idStr || seenIds.has(entryIdStr)) continue;
                 seenIds.add(entryIdStr);
 
-                const dist = this.hammingDistance64(simhash, entry.simhash);
+                const entrySimhash = typeof entry.simhash === "bigint" ? entry.simhash : BigInt(entry.simhash);
+                const dist = this.hammingDistance64(simhash, entrySimhash);
 
                 if (dist <= SIMHASH_HAMMING_THRESHOLD) {
-                  // Change these thresholds in findDuplicatesWithStore
-                  const similarity = parseFloat((1 - dist / 64).toFixed(3));
+                  const similarity = parseFloat((1 - dist / SIMHASH_BITS).toFixed(3));
 
                   let duplicateType;
                   if (dist === 0) {
@@ -268,29 +340,43 @@ class DuplicateProcessorV2 {
               }
             }
 
-            // Deduplicate results by pageUrl (safety net for bucket overlaps)
             duplicates.contentDuplicates = [
               ...new Map(
                 duplicates.contentDuplicates.map((d) => [d.pageUrl, d]),
               ).values(),
             ];
 
-            // Add to buckets if memory guard allows
-            if (store.totalBucketEntries < STORE_MAX_BUCKET_ENTRIES) {
-              const entry = {
-                simhash,
-                _id: page._id,
+            const bucketCount = redis
+              ? parseInt(await redis.get(prefix + "bucket_count") || "0", 10)
+              : store.totalBucketEntries;
+            if (bucketCount < STORE_MAX_BUCKET_ENTRIES) {
+              const entryPayload = JSON.stringify({
+                simhash: simhash.toString(),
+                _id: page._id.toString(),
                 pageUrl: page.pageUrl,
                 wordCount: page.wordCount || 0,
-              };
-              for (const key of bucketKeys) {
-                let bucket = store.contentSimhashBuckets.get(key);
-                if (!bucket) {
-                  bucket = [];
-                  store.contentSimhashBuckets.set(key, bucket);
+              });
+              if (redis) {
+                for (const key of bucketKeys) {
+                  await redis.sAdd(prefix + "b:" + key, entryPayload);
                 }
-                bucket.push(entry);
-                store.totalBucketEntries += 1;
+                await redis.incrBy(prefix + "bucket_count", 8);
+              } else {
+                const entry = {
+                  simhash,
+                  _id: page._id,
+                  pageUrl: page.pageUrl,
+                  wordCount: page.wordCount || 0,
+                };
+                for (const key of bucketKeys) {
+                  let b = store.contentSimhashBuckets.get(key);
+                  if (!b) {
+                    b = [];
+                    store.contentSimhashBuckets.set(key, b);
+                  }
+                  b.push(entry);
+                  store.totalBucketEntries += 1;
+                }
               }
             } else {
               logger.warn(
@@ -302,7 +388,6 @@ class DuplicateProcessorV2 {
 
         duplicateResults.set(idStr, duplicates);
       } catch (pageError) {
-        // One bad page must never crash the whole batch
         logger.error(
           `Duplicate detection failed for page ${page?.pageUrl}:`,
           pageError,
@@ -515,7 +600,14 @@ class DuplicateProcessorV2 {
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
 
-  _emptyStore() {
+  /**
+   * Create a signature store. With Redis: { redis, userActivityId }. Without: in-memory Maps.
+   * @param {string|null} userActivityId - required when this.redis is set (key prefix dup:{userActivityId}:)
+   */
+  _emptyStore(userActivityId) {
+    if (this.redis) {
+      return { redis: this.redis, userActivityId: userActivityId ?? null };
+    }
     return {
       titles: new Map(),
       descriptions: new Map(),
@@ -525,74 +617,149 @@ class DuplicateProcessorV2 {
   }
 
   /**
-   * Pass 1 helper — index pages into the store without returning duplicateResults.
-   * Faster than findDuplicatesWithStore because it skips the comparison step.
+   * Clear all Redis keys for this run (prefix dup:{userActivityId}:). No-op if store has no Redis.
    */
-  _buildStoreOnly(batch, signatureStore) {
-    const store = signatureStore || this._emptyStore();
+  async _clearRedisStore(store) {
+    if (!store?.redis || store.userActivityId == null) return;
+    const r = store.redis;
+    const prefix = this._prefix(store.userActivityId);
+    let cursor = "0";
+    const keys = [];
+    do {
+      const result = await r.scan(cursor, "MATCH", prefix + "*", "COUNT", 500);
+      const [next, k] = Array.isArray(result) ? result : [result, []];
+      cursor = typeof next === "string" ? next : String(next);
+      keys.push(...(Array.isArray(k) ? k : [k]));
+    } while (cursor !== "0");
+    if (keys.length) await r.del(...keys);
+  }
+
+  /**
+   * Pass 1 helper — index pages into the store without returning duplicateResults.
+   * Redis: HSET for titles/descriptions (value = JSON array of { _id, pageUrl } only), SADD for buckets.
+   */
+  async _buildStoreOnly(batch, signatureStore) {
+    const store = signatureStore || this._emptyStore(null);
+    const redis = this._redis(store);
+    const prefix =
+      store.userActivityId != null ? this._prefix(store.userActivityId) : null;
 
     for (const page of batch) {
       try {
-        // Skip canonical pages
         if (page.canonicalUrl && page.canonicalUrl !== page.pageUrl) continue;
 
         const titleNorm =
           page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
-        if (titleNorm && store.titles.size < STORE_MAX_TITLES) {
-          const existing = store.titles.get(titleNorm) || [];
-          existing.push({
-            _id: page._id,
-            pageUrl: page.pageUrl,
-            title: page.title,
-          });
-          store.titles.set(titleNorm, existing);
+        if (titleNorm) {
+          const titleCount = redis
+            ? await redis.hLen(prefix + "titles")
+            : store.titles.size;
+          if (titleCount < STORE_MAX_TITLES) {
+            let existing = [];
+            if (redis) {
+              const raw = await redis.hGet(prefix + "titles", titleNorm);
+              if (raw) {
+                try {
+                  existing = JSON.parse(raw);
+                } catch (_) {
+                  existing = [];
+                }
+              }
+              existing.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+              await redis.hSet(
+                prefix + "titles",
+                titleNorm,
+                JSON.stringify(existing),
+              );
+            } else {
+              const existing = store.titles.get(titleNorm) || [];
+              existing.push({ _id: page._id, pageUrl: page.pageUrl });
+              store.titles.set(titleNorm, existing);
+            }
+          }
         }
 
         const descNorm =
           page.metaDescription?.trim().length > 10
             ? this.normalizeDescription(page.metaDescription)
             : "";
-        if (descNorm && store.descriptions.size < STORE_MAX_DESCRIPTIONS) {
-          const existing = store.descriptions.get(descNorm) || [];
-          existing.push({
-            _id: page._id,
-            pageUrl: page.pageUrl,
-            metaDescription: page.metaDescription,
-          });
-          store.descriptions.set(descNorm, existing);
+        if (descNorm) {
+          const descCount = redis
+            ? await redis.hLen(prefix + "descriptions")
+            : store.descriptions.size;
+          if (descCount < STORE_MAX_DESCRIPTIONS) {
+            let existing = [];
+            if (redis) {
+              const raw = await redis.hGet(prefix + "descriptions", descNorm);
+              if (raw) {
+                try {
+                  existing = JSON.parse(raw);
+                } catch (_) {
+                  existing = [];
+                }
+              }
+              existing.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+              await redis.hSet(
+                prefix + "descriptions",
+                descNorm,
+                JSON.stringify(existing),
+              );
+            } else {
+              const existing = store.descriptions.get(descNorm) || [];
+              existing.push({ _id: page._id, pageUrl: page.pageUrl });
+              store.descriptions.set(descNorm, existing);
+            }
+          }
         }
 
         if (page.content?.trim().length > 100) {
-          // const cleanText = this.extractCleanTextFromHtml(page.content);
-          const shingles = this.getWordShingles(
-            page.content,
-            WORD_SHINGLE_SIZE,
-          );
+          const cleanText = this.extractCleanTextFromHtml(page.content);
+          const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
+
+          const bucketCount = redis
+            ? parseInt(await redis.get(prefix + "bucket_count") || "0", 10)
+            : store.totalBucketEntries;
+
           if (
             shingles.length > 0 &&
-            store.totalBucketEntries < STORE_MAX_BUCKET_ENTRIES
+            bucketCount < STORE_MAX_BUCKET_ENTRIES
           ) {
             const simhash = this.simhashFromWordShingles(shingles);
             const bucketKeys = this.getContentSimhashBucketKeys(simhash);
-            const entry = {
-              simhash,
-              _id: page._id,
+            const entryPayload = JSON.stringify({
+              simhash: simhash.toString(),
+              _id: page._id.toString(),
               pageUrl: page.pageUrl,
               wordCount: page.wordCount || 0,
-            };
-            for (const key of bucketKeys) {
-              let bucket = store.contentSimhashBuckets.get(key);
-              if (!bucket) {
-                bucket = [];
-                store.contentSimhashBuckets.set(key, bucket);
+            });
+
+            if (redis) {
+              for (const key of bucketKeys) {
+                await redis.sAdd(prefix + "b:" + key, entryPayload);
               }
-              bucket.push(entry);
-              store.totalBucketEntries += 1;
+              await redis.incrBy(prefix + "bucket_count", 8);
+            } else {
+              const entry = {
+                simhash,
+                _id: page._id,
+                pageUrl: page.pageUrl,
+                wordCount: page.wordCount || 0,
+              };
+              for (const key of bucketKeys) {
+                let bucket = store.contentSimhashBuckets.get(key);
+                if (!bucket) {
+                  bucket = [];
+                  store.contentSimhashBuckets.set(key, bucket);
+                }
+                bucket.push(entry);
+                store.totalBucketEntries += 1;
+              }
             }
           }
         }
       } catch (err) {
         logger.error(`Pass 1 index error for ${page?.pageUrl}:`, err);
+        console.error(`Pass 1 index error for ${page?.pageUrl}:`, err);
       }
     }
 

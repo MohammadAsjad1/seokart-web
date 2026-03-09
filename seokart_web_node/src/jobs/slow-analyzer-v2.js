@@ -17,10 +17,11 @@ const {
 } = require("../models/webpage-models");
 
 class SlowAnalyzerJobV2 {
-  constructor() {
+  constructor(options = {}) {
+    this.redis = options.redis ?? null;
     this.duplicateProcessor = new DuplicateProcessor();
-    this.duplicateProcessorV2 = new DuplicateProcessorV2();
-    this.linkProcessor = new LinkProcessor();
+    this.duplicateProcessorV2 = new DuplicateProcessorV2({ redis: this.redis });
+    this.linkProcessor = new LinkProcessor({ redis: this.redis });
     this.scoreCalculator = new ScoreCalculator();
     this.grammarChecker = new GrammarSpellChecker();
     this.webpageService = new WebpageService();
@@ -440,12 +441,19 @@ class SlowAnalyzerJobV2 {
       }
 
       // ──────────────────────────────────────────────────────────────────
-      // PASS 1 — build complete duplicate-signature store
+      // PASS 1 — build complete duplicate-signature store (Redis or in-memory)
       // No DB writes; reads only. Cursor-paginated.
       // ──────────────────────────────────────────────────────────────────
       if (!pass1Done) {
         logger.info("Pass 1: building signature store", { userId });
         let chunkCount = 0;
+
+        if (!signatureStore) {
+          signatureStore = this.duplicateProcessorV2._emptyStore(userActivityId);
+          if (this.duplicateProcessorV2.redis) {
+            await this.duplicateProcessorV2._clearRedisStore(signatureStore);
+          }
+        }
 
         while (true) {
           const t0 = Date.now();
@@ -456,7 +464,7 @@ class SlowAnalyzerJobV2 {
           if (!chunk.length) break;
 
           try {
-            const { updatedStore } = this.duplicateProcessorV2._buildStoreOnly(
+            const { updatedStore } = await this.duplicateProcessorV2._buildStoreOnly(
               chunk,
               signatureStore,
             );
@@ -521,10 +529,15 @@ class SlowAnalyzerJobV2 {
         let duplicateResults = new Map();
         try {
           ({ duplicateResults } =
-            this.duplicateProcessorV2.findDuplicatesWithStore(
+            await this.duplicateProcessorV2.findDuplicatesWithStore(
               chunk,
               signatureStore,
             ));
+            logger.info("Duplicate processed for chunk", {
+              userId,
+              chunkCount,
+              chunkLength: chunk.length,
+            });
         } catch (err) {
           logger.error("Pass 2: findDuplicatesWithStore failed", {
             userId,
@@ -549,6 +562,11 @@ class SlowAnalyzerJobV2 {
           // Send in dbBatchSize-sized bulkWrite operations
           for (const batch of this.batchArray(updates, dbBatchSize)) {
             await this.withRetry(() => this.bulkWriteDuplicateResults(batch));
+            logger.info("Bulk write duplicate results for chunk", {
+              userId,
+              chunkCount,
+              batchSize: batch.length,
+            });
           }
         } catch (err) {
           logger.error("Pass 2: bulkWrite failed for chunk", {
