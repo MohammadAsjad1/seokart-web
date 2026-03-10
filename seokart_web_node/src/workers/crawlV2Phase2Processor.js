@@ -4,6 +4,7 @@ const path = require("path");
 const dotenv = require("dotenv");
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
+const Redis = require("ioredis");
 const { connect } = require("../config/database");
 const { initEmitter, emitToUser } = require("../services/socket-emitter");
 const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
@@ -11,6 +12,18 @@ const crawlV2Config = require("../config/crawl-v2");
 const logger = require("../config/logger");
 
 let initialized = false;
+let redisClient = null;
+
+function getRedis() {
+  if (!redisClient) {
+    redisClient = new Redis({
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+      password: process.env.REDIS_PASSWORD || undefined,
+    });
+  }
+  return redisClient;
+}
 
 /**
  * Crawl V2 Phase2: grammar check, duplicate detection, link validation, SEO score, save.
@@ -31,7 +44,8 @@ module.exports = async function (job) {
 
   logger.info(`Crawl V2 Phase2 job ${job.id} starting for activity ${activityId}`, userId);
 
-  const slowAnalyzerJob = new SlowAnalyzerJobV2();
+  const redis = getRedis();
+  const slowAnalyzerJob = new SlowAnalyzerJobV2({ redis });
   const result = await slowAnalyzerJob.analyzeWebpagesChunked(userId, activityId, websiteUrl, {
     chunkSize: crawlV2Config.phase2ChunkSize,
   });

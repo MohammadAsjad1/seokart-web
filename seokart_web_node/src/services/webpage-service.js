@@ -7,6 +7,7 @@ const {
   calculateSEOScore,
 } = require("../models/webpage-models");
 const logger = require("../config/logger");
+const config = require("../config/scraper");
 
 class WebpageService {
   constructor() {
@@ -556,6 +557,51 @@ class WebpageService {
     return true;
   }
 
+  /**
+   * Normalize and cap link list for DB storage (production-safe: size + field length limits).
+   * @param {Array<{url?, text?, type?, rel?}>} raw - from scraper
+   * @param {number} maxCount - max items to store (e.g. 300)
+   * @returns {Array<{url: string, text: string, type: string, rel: string}>}
+   */
+  _normalizeStoredLinks(raw, maxCount = 300) {
+    const MAX_URL_LENGTH = 2048;
+    const MAX_TEXT_LENGTH = 512;
+  
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+  
+    const cap = Math.max(0, Number(maxCount) || 300);
+    const uniqueLinks = new Map();
+  
+    for (const link of raw.slice(0, cap)) {
+      const url =
+        typeof link.url === "string"
+          ? link.url.slice(0, MAX_URL_LENGTH)
+          : "";
+  
+      if (!url) continue; // skip empty urls
+  
+      const text =
+        typeof link.text === "string"
+          ? link.text.slice(0, MAX_TEXT_LENGTH)
+          : "";
+  
+      const type =
+        link.type === "internal" || link.type === "external"
+          ? link.type
+          : "external";
+  
+      const rel =
+        typeof link.rel === "string"
+          ? link.rel.slice(0, 128)
+          : "";
+  
+      // dedupe by url
+      uniqueLinks.set(url, { url, text, type, rel });
+    }
+  
+    return Array.from(uniqueLinks.values());
+  }
+
   // Save/update WebpageTechnical
   async upsertWebpageTechnical(technicalData, webpageCoreId, isExistingCore) {
     try {
@@ -574,7 +620,7 @@ class WebpageService {
           hasCharset: technicalData.technicalSeo?.hasCharset || false,
         },
 
-        // Links analysis with new fields
+        // Links analysis with new fields (allLinks stored at scrape for validation phase)
         links: {
           totalCount: technicalData.links?.totalCount || 0,
           internalCount: technicalData.links?.internalCount || 0,
@@ -590,6 +636,10 @@ class WebpageService {
             : 0, // NEW
           httpLinksCount: technicalData.links?.httpLinksCount || 0,
           httpsLinksCount: technicalData.links?.httpsLinksCount || 0,
+          allLinks: this._normalizeStoredLinks(
+            technicalData.links?.allLinks,
+            config.performance?.max_links_stored_per_page ?? 300,
+          ),
         },
 
         // Broken links

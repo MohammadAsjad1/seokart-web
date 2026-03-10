@@ -224,6 +224,15 @@ const WebpageTechnicalSchema = new mongoose.Schema(
       redirectLinksCount: { type: Number, default: 0 },
       httpLinksCount: { type: Number, default: 0 },
       httpsLinksCount: { type: Number, default: 0 },
+      // Stored at scrape time for link validation phase (no re-fetch). Capped by config.
+      allLinks: [
+        {
+          url: { type: String },
+          text: { type: String },
+          type: { type: String, enum: ["internal", "external"] },
+          rel: { type: String },
+        },
+      ],
     },
 
     // Point 15: Internal broken links details

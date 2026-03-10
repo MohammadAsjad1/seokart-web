@@ -1,5 +1,6 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
+const crypto = require("crypto");
 const { URL } = require("url");
 const logger = require("../config/logger");
 const pLimit = require("p-limit").default;
@@ -13,18 +14,24 @@ const DEFAULT_HEADERS = {
 };
 
 class LinkProcessor {
-  constructor() {
+  constructor(options = {}) {
+    this.redis = options.redis ?? null;
     this.stats = {
       linksChecked: 0,
       internalBrokenLinksFound: 0,
       externalBrokenLinksFound: 0,
       redirectLinksFound: 0,
       errors: 0,
+      linkCacheHits: 0,
+      linkCacheMisses: 0,
     };
     this.timeout = config.timeouts?.link_check ?? 3000;
     this.maxRedirects = 5;
     this.domainCache = new Map();
     this.DOMAIN_CACHE_TTL = 60000;
+    this._cacheConfig = config.link_validation_cache || {};
+    this._redisGet = this.redis ? this.redis.get.bind(this.redis) : null;
+    this._redisSet = this.redis ? this.redis.set.bind(this.redis) : null;
   }
 
   async validatePageLinks(webpage) {
@@ -133,33 +140,35 @@ class LinkProcessor {
         }
       }
 
+      // ====== updated, already storing the unique links while scraping =======
       // Clean up and remove duplicates
-      const uniqueLinks = [];
-      const seenUrls = new Set();
+      // const uniqueLinks = [];
+      // const seenUrls = new Set();
 
-      for (const link of links) {
-        const url = link.url || link.href;
-        if (!url) continue;
+      // for (const link of links) {
+      //   const url = link.url || link.href;
+      //   if (!url) continue;
 
-        if (this.shouldSkipLink(url)) {
-          continue;
-        }
+      //   if (this.shouldSkipLink(url)) {
+      //     continue;
+      //   }
 
-        const resolvedUrl = this.resolveUrl(url, pageUrl);
-        if (!resolvedUrl) continue;
+      //   const resolvedUrl = this.resolveUrl(url, pageUrl);
+      //   if (!resolvedUrl) continue;
 
-        if (!seenUrls.has(resolvedUrl)) {
-          seenUrls.add(resolvedUrl);
-          uniqueLinks.push({
-            url: resolvedUrl,
-            href: resolvedUrl,
-            text: link.text || url
-          });
-        }
-      }
+      //   if (!seenUrls.has(resolvedUrl)) {
+      //     seenUrls.add(resolvedUrl);
+      //     uniqueLinks.push({
+      //       url: resolvedUrl,
+      //       href: resolvedUrl,
+      //       text: link.text || url
+      //     });
+      //   }
+      // }
 
-      logger.info(`✨ Returning ${uniqueLinks.length} unique valid links for validation`);
-      return uniqueLinks;
+      // logger.info(`✨ Returning ${uniqueLinks.length} unique valid links for validation`);
+      // return uniqueLinks;
+      return links;
 
     } catch (error) {
       logger.error("❌ Error extracting links from webpage:", error);
@@ -288,17 +297,91 @@ class LinkProcessor {
     } catch {}
   }
 
+  /** Normalize URL for cache key: strip fragment; use hash if URL too long. */
+  _linkCacheKey(url) {
+    if (!url || typeof url !== "string") return null;
+    let normalized = url.trim();
+    try {
+      const u = new URL(normalized);
+      u.hash = "";
+      normalized = u.href;
+    } catch {
+      return null;
+    }
+    const prefix = this._cacheConfig.key_prefix || "lv:";
+    const maxLen = this._cacheConfig.max_key_length ?? 400;
+    if (normalized.length <= maxLen) return prefix + normalized;
+    const hash = crypto.createHash("sha256").update(normalized).digest("hex");
+    return prefix + "h:" + hash;
+  }
+
+  /** Get cached link status. Returns null on miss or error. */
+  async _getLinkCache(url) {
+    if (!this._redisGet || !this._cacheConfig.enabled) return null;
+    const key = this._linkCacheKey(url);
+    if (!key) return null;
+    try {
+      const raw = await this._redisGet(key);
+      if (raw == null || raw === "") return null;
+      const parsed = JSON.parse(raw);
+      if (
+        typeof parsed.isBroken !== "boolean" ||
+        typeof parsed.isRedirect !== "boolean"
+      )
+        return null;
+      this.stats.linkCacheHits++;
+      return parsed;
+    } catch {
+      this.stats.linkCacheMisses++;
+      return null;
+    }
+  }
+
+  /** Set cached link status. No-op on error. */
+  async _setLinkCache(url, result) {
+    if (!this._redisSet || !this._cacheConfig.enabled || result == null)
+      return;
+    const key = this._linkCacheKey(url);
+    if (!key) return;
+    const ttl = Math.max(60, this._cacheConfig.ttl_seconds ?? 1800);
+    const payload = JSON.stringify({
+      isBroken: result.isBroken,
+      isRedirect: result.isRedirect,
+      statusCode: result.statusCode ?? 0,
+      error: result.error ?? null,
+      redirectTo: result.redirectTo ?? null,
+    });
+    try {
+      await this._redisSet(key, payload, "EX", ttl);
+      logger.debug("Link cache set successfully");
+    } catch (err) {
+      logger.debug("Link cache set failed (non-fatal)", { key: key.slice(0, 50), err: err?.message });
+    }
+  }
+
   async checkLinkStatus(url, timeout) {
     // Fast path: if we already know this domain is dead, do not waste more requests.
-    const cachedDead = this._isDomainDead(url);
-    if (cachedDead === true) {
-      return {
-        isBroken: true,
-        isRedirect: false,
-        statusCode: 0,
-        error: "Domain previously unreachable (cached)",
-      };
+    // const cachedDead = this._isDomainDead(url);
+    // if (cachedDead === true) {
+    //   return {
+    //     isBroken: true,
+    //     isRedirect: false,
+    //     statusCode: 0,
+    //     error: "Domain previously unreachable (cached)",
+    //   };
+    // }
+
+    // Redis cache: same URL validated once per TTL across all pages/users
+    try {
+      const cached = await this._getLinkCache(url);
+      if (cached) {
+        logger.debug("Link cache hit for URL:", url);
+        return cached;
+      }
+    } catch {
+      // Redis down or parse error: fall back to live check
     }
+    if (this._cacheConfig.enabled && this._redisGet) this.stats.linkCacheMisses++;
 
     const baseConfig = {
       timeout,
@@ -306,14 +389,14 @@ class LinkProcessor {
       validateStatus: () => true,
       headers: DEFAULT_HEADERS,
     };
-  
+
     try {
       const response = await axios.head(url, baseConfig);
       const parsed = this.parseResponse(response);
-      // Only mark as alive on a non-error, non-redirect response
-      if (!parsed.isBroken && !parsed.isRedirect) {
-        this._markDomain(url, false);
-      }
+      // if (!parsed.isBroken && !parsed.isRedirect) {
+      //   this._markDomain(url, false);
+      // }
+      await this._setLinkCache(url, parsed);
       return parsed;
     } catch {
       // HEAD not supported by server, fall back to GET
@@ -326,19 +409,21 @@ class LinkProcessor {
       });
       response.data.destroy();
       const parsed = this.parseResponse(response);
-      if (!parsed.isBroken && !parsed.isRedirect) {
-        this._markDomain(url, false);
-      }
+      // if (!parsed.isBroken && !parsed.isRedirect) {
+      //   this._markDomain(url, false);
+      // }
+      await this._setLinkCache(url, parsed);
       return parsed;
     } catch (err) {
-      // Treat repeated connection-level failures as a dead domain for a short TTL window
-      this._markDomain(url, true);
-      return {
+      // this._markDomain(url, true);
+      const parsed = {
         isBroken: true,
         isRedirect: false,
         statusCode: 0,
         error: err.code || err.message || "Connection failed",
       };
+      await this._setLinkCache(url, parsed);
+      return parsed;
     }
   }
 
@@ -403,6 +488,8 @@ class LinkProcessor {
       externalBrokenLinksFound: 0,
       redirectLinksFound: 0,
       errors: 0,
+      linkCacheHits: 0,
+      linkCacheMisses: 0,
     };
   }
 }

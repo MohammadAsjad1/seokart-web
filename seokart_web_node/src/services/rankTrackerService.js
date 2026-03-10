@@ -218,7 +218,7 @@ class RankTrackerService {
   async createAiModeTask(userId, keywordId, keyword, location) {
     try {
       // Construct callback URL for AI Mode tasks
-      const aiModeCallbackUrl = `http://52.27.43.67/backend/api/rank-tracker/ai-mode-callback`;
+      const aiModeCallbackUrl = `${process.env.BASE_URL}/api/rank-tracker/ai-mode-callback`;
 
       const tagData = JSON.stringify({
         keywordId,

@@ -84,6 +84,16 @@ module.exports = {
     socket_emit_throttle: 2000, // 2 seconds
     stats_collection_interval: 30000, // 30 seconds
     health_check_interval: 60000, // 1 minute
-    link_validation_max_links_per_page: parseInt(process.env.LINK_VALIDATION_MAX_LINKS_PER_PAGE) || 80 // cap to avoid one page dominating; 0 = no cap
+    link_validation_max_links_per_page: parseInt(process.env.LINK_VALIDATION_MAX_LINKS_PER_PAGE) || 80, // cap to avoid one page dominating; 0 = no cap
+    // Max links stored per page at scrape time (for later validation without re-fetch). 0 = use default.
+    max_links_stored_per_page: parseInt(process.env.MAX_LINKS_STORED_PER_PAGE) || 300
+  },
+
+  // Redis cache for link validation results (same URL = one HTTP check per TTL across all pages/users)
+  link_validation_cache: {
+    enabled: process.env.LINK_VALIDATION_CACHE_ENABLED !== "false",
+    ttl_seconds: parseInt(process.env.LINK_VALIDATION_CACHE_TTL_SECONDS, 10) || 1800, // 30 min default
+    key_prefix: process.env.LINK_VALIDATION_CACHE_KEY_PREFIX || "lv:",
+    max_key_length: 400, // URLs longer than this are stored under sha256 hash
   }
 };

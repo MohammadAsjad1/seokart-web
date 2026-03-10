@@ -410,6 +410,8 @@ class WebScraper {
     const $ = cheerio.load(html);
     const websiteUrl = this.extractWebsiteUrl(url);
 
+    const links = this.extractDetailedLinkInfo($, url);
+
     $(
       "script, style, noscript, nav, header, footer, aside, .advertisement, .ads, .social-share"
     ).remove();
@@ -432,7 +434,7 @@ class WebScraper {
 
     const headings = this.extractHeadings($);
     const images = this.extractBasicImageInfo($);
-    const links = this.extractDetailedLinkInfo($, url);
+    // const links = this.extractDetailedLinkInfo($, url);
     const technical = this.extractBasicTechnicalInfo($);
     const wordCount = this.calculateWordCount(content);
 
@@ -582,6 +584,10 @@ class WebScraper {
       }
     });
 
+    const maxStored =
+      config.performance?.max_links_stored_per_page ?? 300;
+    const capped = maxStored > 0 ? allLinks.slice(0, maxStored) : allLinks;
+
     return {
       totalCount,
       internalCount,
@@ -592,7 +598,7 @@ class WebScraper {
       httpLinksCount,
       httpsLinksCount: totalCount - httpLinksCount,
       noFollowCount: $('a[rel*="nofollow"]').length,
-      allLinks: allLinks.slice(0, 50),
+      allLinks: capped,
     };
   }
 
