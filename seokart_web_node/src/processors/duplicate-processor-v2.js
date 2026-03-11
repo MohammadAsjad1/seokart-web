@@ -9,11 +9,13 @@ const WORD_SHINGLE_SIZE = 3;
 const SIMHASH_BITS = 64;
 const JENKINS_SALT_HIGH = "\x01"; // salt for high 32 bits of 64-bit shingle hash
 
-const STORE_MAX_TITLES = 50000;
-const STORE_MAX_DESCRIPTIONS = 50000;
-const STORE_MAX_BUCKET_ENTRIES = 200000;
+const STORE_MAX_TITLES = 200000;
+const STORE_MAX_DESCRIPTIONS = 200000;
+const STORE_MAX_BUCKET_ENTRIES = 1000000;
 
 const REDIS_KEY_PREFIX = "dup";
+/** TTL for duplicate-store keys (seconds). Default 24h; set DUP_REDIS_TTL_SECONDS to override. */
+const REDIS_TTL_SECONDS = Number(process.env.DUP_REDIS_TTL_SECONDS) || 86400;
 
 // ─── Scoring weights ──────────────────────────────────────────────────────────
 const SCORE_PENALTIES = {
@@ -66,7 +68,35 @@ class DuplicateProcessorV2 {
       incrBy: (r.incrBy ?? r.incrby).bind(r),
       scan: r.scan.bind(r),
       del: r.del.bind(r),
+      expire: (r.expire ?? r.EXPIRE).bind(r),
     };
+  }
+
+  /**
+   * Execute multiple Redis commands in a single pipeline to reduce round trips.
+   * @param {Object} store - signature store with .redis
+   * @param {Array<{ cmd: string, args: Array }>} commands - e.g. [{ cmd: 'hGet', args: [key, field] }]
+   * @returns {Promise<Array>} results in same order (null on error or missing)
+   */
+  async _execPipeline(store, commands) {
+    if (!store?.redis || !commands.length) return commands.map(() => null);
+    const r = store.redis;
+    const usePipeline = typeof r.pipeline === "function";
+    const multi = usePipeline ? r.pipeline() : r.multi?.();
+    if (!multi) return Promise.all(commands.map((c) => (r[c.cmd] ?? r[c.cmd?.toLowerCase()])?.(...c.args) ?? Promise.resolve(null)));
+    const cmdToMethod = usePipeline
+      ? { hGet: "hget", hSet: "hset", hLen: "hlen", get: "get", sAdd: "sadd", sMembers: "smembers", incrBy: "incrby", expire: "expire" }
+      : { hGet: "hGet", hSet: "hSet", hLen: "hLen", get: "get", sAdd: "sAdd", sMembers: "sMembers", incrBy: "incrBy", expire: "expire" };
+    for (const { cmd, args } of commands) {
+      const method = cmdToMethod[cmd] ?? (usePipeline ? cmd.toLowerCase() : cmd);
+      if (typeof multi[method] === "function") multi[method](...args);
+    }
+    const results = await (multi.exec ? multi.exec() : multi.execAsync?.() ?? Promise.resolve([]));
+    if (!Array.isArray(results)) return commands.map(() => null);
+    return results.map((res) => {
+      const err = Array.isArray(res) ? res[0] : res;
+      return err ? null : (Array.isArray(res) ? res[1] : res);
+    });
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
@@ -178,27 +208,56 @@ class DuplicateProcessorV2 {
           continue;
         }
 
-        // ── Title ──────────────────────────────────────────────────────────
+        // ── Title & Description: pipeline reads first ───────────────────────
         const titleNorm =
           page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
+        const descNorm =
+          page.metaDescription?.trim().length > 10
+            ? this.normalizeDescription(page.metaDescription)
+            : "";
 
-        if (titleNorm) {
-          let existing = [];
-          if (redis) {
-            const raw = await redis.hGet(prefix + "titles", titleNorm);
-            if (raw) {
-              try {
-                existing = JSON.parse(raw);
-              } catch (_) {
-                existing = [];
-              }
+        let titleExisting = [];
+        let titleCount = 0;
+        let descExisting = [];
+        let descCount = 0;
+        const pageWriteCmds = [];
+
+        if (redis) {
+          const readCmds = [
+            { cmd: "hGet", args: [prefix + "titles", titleNorm] },
+            { cmd: "hLen", args: [prefix + "titles"] },
+            { cmd: "hGet", args: [prefix + "descriptions", descNorm] },
+            { cmd: "hLen", args: [prefix + "descriptions"] },
+          ];
+          const readResults = await this._execPipeline(store, readCmds);
+          const titleRaw = readResults[0];
+          if (titleRaw != null && titleRaw !== "") {
+            try {
+              titleExisting = JSON.parse(titleRaw);
+            } catch (_) {
+              titleExisting = [];
             }
-          } else {
-            existing = store.titles.get(titleNorm) || [];
           }
+          titleCount = readResults[1] != null ? Number(readResults[1]) : 0;
+          const descRaw = readResults[2];
+          if (descRaw != null && descRaw !== "") {
+            try {
+              descExisting = JSON.parse(descRaw);
+            } catch (_) {
+              descExisting = [];
+            }
+          }
+          descCount = readResults[3] != null ? Number(readResults[3]) : 0;
+        } else {
+          if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
+          titleCount = store.titles.size;
+          if (descNorm) descExisting = store.descriptions.get(descNorm) || [];
+          descCount = store.descriptions.size;
+        }
 
-          const others = existing.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
-
+        // ── Title ──────────────────────────────────────────────────────────
+        if (titleNorm) {
+          const others = titleExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
             const raw = others.map((e) => ({
               pageUrl: e.pageUrl,
@@ -211,44 +270,16 @@ class DuplicateProcessorV2 {
             ];
             this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
           }
-
-          const titleCount = redis
-            ? await redis.hLen(prefix + "titles")
-            : store.titles.size;
           if (titleCount < STORE_MAX_TITLES) {
             const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
-            existing.push(newEntry);
-            if (redis) {
-              await redis.hSet(prefix + "titles", titleNorm, JSON.stringify(existing));
-            } else {
-              store.titles.set(titleNorm, existing);
-            }
+            titleExisting.push(newEntry);
+            if (!redis) store.titles.set(titleNorm, titleExisting);
           }
         }
 
         // ── Meta Description ───────────────────────────────────────────────
-        const descNorm =
-          page.metaDescription?.trim().length > 10
-            ? this.normalizeDescription(page.metaDescription)
-            : "";
-
         if (descNorm) {
-          let existing = [];
-          if (redis) {
-            const raw = await redis.hGet(prefix + "descriptions", descNorm);
-            if (raw) {
-              try {
-                existing = JSON.parse(raw);
-              } catch (_) {
-                existing = [];
-              }
-            }
-          } else {
-            existing = store.descriptions.get(descNorm) || [];
-          }
-
-          const others = existing.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
-
+          const others = descExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
             const raw = others.map((e) => ({
               pageUrl: e.pageUrl,
@@ -262,22 +293,17 @@ class DuplicateProcessorV2 {
             this.stats.descriptionDuplicatesFound +=
               duplicates.descriptionDuplicates.length;
           }
-
-          const descCount = redis
-            ? await redis.hLen(prefix + "descriptions")
-            : store.descriptions.size;
           if (descCount < STORE_MAX_DESCRIPTIONS) {
             const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
-            existing.push(newEntry);
-            if (redis) {
-              await redis.hSet(prefix + "descriptions", descNorm, JSON.stringify(existing));
-            } else {
-              store.descriptions.set(descNorm, existing);
-            }
+            descExisting.push(newEntry);
+            if (!redis) store.descriptions.set(descNorm, descExisting);
           }
         }
 
-        // ── Content (SimHash) ──────────────────────────────────────────────
+        // ── Content (SimHash): pipeline bucket reads, then process ──────────
+        let bucketCount = redis ? null : store.totalBucketEntries;
+        let contentBucketMembers = null; // [arr0, arr1, ...] for 8 keys
+
         if (page.content?.trim().length > 100) {
           const cleanText = this.extractCleanTextFromHtml(page.content);
           const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
@@ -286,26 +312,37 @@ class DuplicateProcessorV2 {
             const simhash = this.simhashFromWordShingles(shingles);
             const bucketKeys = this.getContentSimhashBucketKeys(simhash);
 
-            const seenIds = new Set();
+            if (redis) {
+              const contentReadCmds = [
+                { cmd: "get", args: [prefix + "bucket_count"] },
+                ...bucketKeys.map((key) => ({ cmd: "sMembers", args: [prefix + "b:" + key] })),
+              ];
+              const contentReadResults = await this._execPipeline(store, contentReadCmds);
+              bucketCount = parseInt(contentReadResults[0] || "0", 10);
+              contentBucketMembers = contentReadResults.slice(1, 9);
+            }
 
-            for (const key of bucketKeys) {
+            const seenIds = new Set();
+            for (let i = 0; i < bucketKeys.length; i++) {
               let bucket = [];
-              if (redis) {
-                const bucketKey = prefix + "b:" + key;
-                const members = await redis.sMembers(bucketKey);
-                bucket = members.map((m) => {
-                  try {
-                    const o = JSON.parse(m);
-                    return {
-                      ...o,
-                      simhash: BigInt(o.simhash),
-                    };
-                  } catch (_) {
-                    return null;
+              if (redis && contentBucketMembers?.[i]) {
+                const members = contentBucketMembers[i];
+                if (Array.isArray(members)) {
+                  for (const m of members) {
+                    if (m == null || m === "") continue;
+                    try {
+                      const o = JSON.parse(m);
+                      bucket.push({
+                        ...o,
+                        simhash: BigInt(o.simhash),
+                      });
+                    } catch (_) {
+                      // skip malformed entry
+                    }
                   }
-                }).filter(Boolean);
-              } else {
-                bucket = store.contentSimhashBuckets.get(key) || [];
+                }
+              } else if (!redis) {
+                bucket = store.contentSimhashBuckets.get(bucketKeys[i]) || [];
               }
 
               for (const entry of bucket) {
@@ -323,10 +360,9 @@ class DuplicateProcessorV2 {
                   if (dist === 0) {
                     duplicateType = "exact_match";
                   } else if (dist <= 3) {
-                    // This is roughly 95% similarity
                     duplicateType = "near_exact";
                   } else {
-                    duplicateType = "near_duplicate"; // Distances 4, 5, 6
+                    duplicateType = "near_duplicate";
                   }
 
                   duplicates.contentDuplicates.push({
@@ -346,9 +382,7 @@ class DuplicateProcessorV2 {
               ).values(),
             ];
 
-            const bucketCount = redis
-              ? parseInt(await redis.get(prefix + "bucket_count") || "0", 10)
-              : store.totalBucketEntries;
+            if (bucketCount === null) bucketCount = store.totalBucketEntries;
             if (bucketCount < STORE_MAX_BUCKET_ENTRIES) {
               const entryPayload = JSON.stringify({
                 simhash: simhash.toString(),
@@ -358,9 +392,11 @@ class DuplicateProcessorV2 {
               });
               if (redis) {
                 for (const key of bucketKeys) {
-                  await redis.sAdd(prefix + "b:" + key, entryPayload);
+                  pageWriteCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
+                  pageWriteCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
                 }
-                await redis.incrBy(prefix + "bucket_count", 8);
+                pageWriteCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", 8] });
+                pageWriteCmds.push({ cmd: "expire", args: [prefix + "bucket_count", REDIS_TTL_SECONDS] });
               } else {
                 const entry = {
                   simhash,
@@ -386,6 +422,26 @@ class DuplicateProcessorV2 {
           }
         }
 
+        // ── Pipeline all Redis writes for this page (title, description, content) ─
+        if (redis) {
+          if (titleNorm && titleCount < STORE_MAX_TITLES) {
+            pageWriteCmds.push({
+              cmd: "hSet",
+              args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)],
+            });
+            pageWriteCmds.push({ cmd: "expire", args: [prefix + "titles", REDIS_TTL_SECONDS] });
+          }
+          if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
+            pageWriteCmds.push({
+              cmd: "hSet",
+              args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)],
+            });
+            pageWriteCmds.push({ cmd: "expire", args: [prefix + "descriptions", REDIS_TTL_SECONDS] });
+          }
+          if (pageWriteCmds.length) await this._execPipeline(store, pageWriteCmds);
+        }
+
+        this.stats.webpagesAnalyzed++;
         duplicateResults.set(idStr, duplicates);
       } catch (pageError) {
         logger.error(
@@ -453,7 +509,7 @@ class DuplicateProcessorV2 {
     }
     try {
       const $ = cheerio.load(trimmed);
-      $("nav, footer, header, script, style, noscript, iframe").remove();
+      $("nav, footer, header, aside, script, style, noscript, iframe, svg, form, button").remove();
       const text = $("body").length ? $("body").text() : $.text();
       return this.normalizeContent(text);
     } catch {
@@ -520,9 +576,7 @@ class DuplicateProcessorV2 {
       const high = parseInt(jenkins.hash32(s + JENKINS_SALT_HIGH), 16) >>> 0;
       return (BigInt(high) << 32n) | BigInt(low);
     });
-    const unique = [...new Set(hashes)].sort((a, b) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    );
+    const unique = [...new Set(hashes)];
     const selected =
       unique.length > SIMHASH_MAX_FEATURES
         ? unique.slice(0, SIMHASH_MAX_FEATURES)
@@ -650,75 +704,65 @@ class DuplicateProcessorV2 {
 
         const titleNorm =
           page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
-        if (titleNorm) {
-          const titleCount = redis
-            ? await redis.hLen(prefix + "titles")
-            : store.titles.size;
-          if (titleCount < STORE_MAX_TITLES) {
-            let existing = [];
-            if (redis) {
-              const raw = await redis.hGet(prefix + "titles", titleNorm);
-              if (raw) {
-                try {
-                  existing = JSON.parse(raw);
-                } catch (_) {
-                  existing = [];
-                }
-              }
-              existing.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
-              await redis.hSet(
-                prefix + "titles",
-                titleNorm,
-                JSON.stringify(existing),
-              );
-            } else {
-              const existing = store.titles.get(titleNorm) || [];
-              existing.push({ _id: page._id, pageUrl: page.pageUrl });
-              store.titles.set(titleNorm, existing);
-            }
-          }
-        }
-
         const descNorm =
           page.metaDescription?.trim().length > 10
             ? this.normalizeDescription(page.metaDescription)
             : "";
-        if (descNorm) {
-          const descCount = redis
-            ? await redis.hLen(prefix + "descriptions")
-            : store.descriptions.size;
-          if (descCount < STORE_MAX_DESCRIPTIONS) {
-            let existing = [];
-            if (redis) {
-              const raw = await redis.hGet(prefix + "descriptions", descNorm);
-              if (raw) {
-                try {
-                  existing = JSON.parse(raw);
-                } catch (_) {
-                  existing = [];
-                }
-              }
-              existing.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
-              await redis.hSet(
-                prefix + "descriptions",
-                descNorm,
-                JSON.stringify(existing),
-              );
-            } else {
-              const existing = store.descriptions.get(descNorm) || [];
-              existing.push({ _id: page._id, pageUrl: page.pageUrl });
-              store.descriptions.set(descNorm, existing);
+
+        let titleCount = 0;
+        let titleExisting = [];
+        let descCount = 0;
+        let descExisting = [];
+        let bucketCount = 0;
+
+        if (redis) {
+          const readCmds = [
+            { cmd: "hLen", args: [prefix + "titles"] },
+            { cmd: "hGet", args: [prefix + "titles", titleNorm] },
+            { cmd: "hLen", args: [prefix + "descriptions"] },
+            { cmd: "hGet", args: [prefix + "descriptions", descNorm] },
+            { cmd: "get", args: [prefix + "bucket_count"] },
+          ];
+          const readResults = await this._execPipeline(store, readCmds);
+          titleCount = readResults[0] != null ? Number(readResults[0]) : 0;
+          const titleRaw = readResults[1];
+          if (titleRaw != null && titleRaw !== "") {
+            try {
+              titleExisting = JSON.parse(titleRaw);
+            } catch (_) {
+              titleExisting = [];
             }
           }
+          descCount = readResults[2] != null ? Number(readResults[2]) : 0;
+          const descRaw = readResults[3];
+          if (descRaw != null && descRaw !== "") {
+            try {
+              descExisting = JSON.parse(descRaw);
+            } catch (_) {
+              descExisting = [];
+            }
+          }
+          bucketCount = parseInt(readResults[4] || "0", 10);
+        } else {
+          titleCount = store.titles.size;
+          if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
+          descCount = store.descriptions.size;
+          if (descNorm) descExisting = store.descriptions.get(descNorm) || [];
+          bucketCount = store.totalBucketEntries;
+        }
+
+        if (titleNorm && titleCount < STORE_MAX_TITLES) {
+          titleExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+          if (!redis) store.titles.set(titleNorm, titleExisting);
+        }
+        if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
+          descExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+          if (!redis) store.descriptions.set(descNorm, descExisting);
         }
 
         if (page.content?.trim().length > 100) {
           const cleanText = this.extractCleanTextFromHtml(page.content);
           const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
-
-          const bucketCount = redis
-            ? parseInt(await redis.get(prefix + "bucket_count") || "0", 10)
-            : store.totalBucketEntries;
 
           if (
             shingles.length > 0 &&
@@ -734,10 +778,14 @@ class DuplicateProcessorV2 {
             });
 
             if (redis) {
+              const writeCmds = [];
               for (const key of bucketKeys) {
-                await redis.sAdd(prefix + "b:" + key, entryPayload);
+                writeCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
+                writeCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
               }
-              await redis.incrBy(prefix + "bucket_count", 8);
+              writeCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", 8] });
+              writeCmds.push({ cmd: "expire", args: [prefix + "bucket_count", REDIS_TTL_SECONDS] });
+              await this._execPipeline(store, writeCmds);
             } else {
               const entry = {
                 simhash,
@@ -756,6 +804,25 @@ class DuplicateProcessorV2 {
               }
             }
           }
+        }
+
+        if (redis) {
+          const writeCmds = [];
+          if (titleNorm && titleCount < STORE_MAX_TITLES) {
+            writeCmds.push({
+              cmd: "hSet",
+              args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)],
+            });
+            writeCmds.push({ cmd: "expire", args: [prefix + "titles", REDIS_TTL_SECONDS] });
+          }
+          if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
+            writeCmds.push({
+              cmd: "hSet",
+              args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)],
+            });
+            writeCmds.push({ cmd: "expire", args: [prefix + "descriptions", REDIS_TTL_SECONDS] });
+          }
+          if (writeCmds.length) await this._execPipeline(store, writeCmds);
         }
       } catch (err) {
         logger.error(`Pass 1 index error for ${page?.pageUrl}:`, err);
