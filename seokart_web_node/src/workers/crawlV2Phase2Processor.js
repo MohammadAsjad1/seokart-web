@@ -7,6 +7,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 const Redis = require("ioredis");
 const { connect } = require("../config/database");
 const { initEmitter, emitToUser } = require("../services/socket-emitter");
+const LinkProcessor = require("../processors/link-processor");
 const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
 const crawlV2Config = require("../config/crawl-v2");
 const logger = require("../config/logger");
@@ -49,6 +50,22 @@ module.exports = async function (job) {
   const result = await slowAnalyzerJob.analyzeWebpagesChunked(userId, activityId, websiteUrl, {
     chunkSize: crawlV2Config.phase2ChunkSize,
   });
+
+  try {
+   let signatureStore = slowAnalyzerJob.duplicateProcessorV2._emptyStore(activityId);
+    if (slowAnalyzerJob.duplicateProcessorV2.redis) {
+      await slowAnalyzerJob.duplicateProcessorV2._clearRedisStore(signatureStore);
+      logger.info("Redis store cleanup completed for duplicate processor", { activityId });
+    }
+  } catch (err) {
+    logger.error("❌ Redis store cleanup failed for duplicate processor (non-fatal)", { err: err?.message });
+  }
+
+  try {
+    await LinkProcessor.clearActivityLinkCache(redis, activityId);
+  } catch (clearErr) {
+    logger.warn("Link cache cleanup failed (non-fatal)", { activityId, err: clearErr?.message });
+  }
 
   const { emitUserActivitiesUpdate } = require("../controllers/scraperController");
   emitToUser(userId, "crawl_complete", {
