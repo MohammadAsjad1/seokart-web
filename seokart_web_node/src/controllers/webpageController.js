@@ -205,7 +205,10 @@ const getPaginatedWebpages = async (req, res) => {
 
       if (include === "technical" || include === "all") {
         populatePromises.push(
-          WebpageTechnical.find({ webpageCoreId: { $in: webpageIds } }).lean()
+          WebpageTechnical.find(
+            { webpageCoreId: { $in: webpageIds } },
+            { "links.allLinks": 0 }
+          ).lean()
         );
       } else {
         populatePromises.push(Promise.resolve(null));

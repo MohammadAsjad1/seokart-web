@@ -3,8 +3,8 @@ module.exports = {
   concurrency: {
     fast_scraper: parseInt(process.env.FAST_SCRAPER_CONCURRENCY) || 20,
     slow_analyzer: parseInt(process.env.SLOW_ANALYZER_CONCURRENCY) || 12,
-    link_validation: parseInt(process.env.LINK_VALIDATION_CONCURRENCY) || 20,
-    link_checks_per_page: parseInt(process.env.LINK_CHECKS_PER_PAGE) || 40,
+    link_validation: parseInt(process.env.LINK_VALIDATION_CONCURRENCY) || 10,
+    link_checks_per_page: parseInt(process.env.LINK_CHECKS_PER_PAGE) || 30,
     sitemap_processing: parseInt(process.env.SITEMAP_CONCURRENCY) || 8,
     max_users: parseInt(process.env.MAX_CONCURRENT_USERS) || 3
   },

@@ -596,10 +596,20 @@ class WebpageService {
           : "";
   
       // dedupe by url
-      uniqueLinks.set(url, { url, text, type, rel });
+      uniqueLinks.set(url, { url: this.normalizeUrl(url), text, type, rel });
     }
-  
+    
     return Array.from(uniqueLinks.values());
+  }
+
+  normalizeUrl(url) {
+    try {
+      const u = new URL(url);
+      u.hash = "";
+      return u.href;
+    } catch {
+      return url;
+    }
   }
 
   // Save/update WebpageTechnical
