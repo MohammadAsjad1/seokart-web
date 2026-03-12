@@ -11,6 +11,7 @@ const urlUtils = require("../utils/url-utils");
 const { WebpageCore } = require("../models/webpage-models");
 const crashRecoveryService = require("./crash-recovery-service");
 const scrapeQueue = require("../queue/scrapeQueue");
+const crawlV2Phase1Queue = require("../queue/crawlV2Phase1Queue");
 
 class ScraperService {
   constructor() {
@@ -543,6 +544,7 @@ class ScraperService {
       logger.info(`Attempting to stop crawl for activity ${activityId}`);
 
       let removedFromQueue = false;
+      let jobFoundAndActive = false; // job is in queue and currently running (worker will see stop via DB/flag)
       const activity = await this.activityService.getActivity(activityId);
       if (activity?.userId != null && activity?.websiteUrl) {
         const userId = String(activity.userId);
@@ -552,26 +554,37 @@ class ScraperService {
           .update(normalizedUrl)
           .digest("hex")
           .slice(0, 16);
-        const bullJobId = `crawl_${userId}_${siteHash}`;
-        const queueJob = await scrapeQueue.getJob(bullJobId).catch(() => null);
-        if (queueJob) {
-          const state = await queueJob.getState();
+        // const bullJobId = `crawl_${userId}_${siteHash}`;
+        // const queueJob = await scrapeQueue.getJob(bullJobId).catch(() => null);
+        const jobId = `crawlV2_phase1_${userId}_${siteHash}`;
+        const existingJob = await crawlV2Phase1Queue.getJob(jobId).catch(() => null);
+        if (existingJob) {
+          const state = await existingJob.getState();
+
           if (state === "waiting" || state === "delayed") {
-            await queueJob.remove();
-            removedFromQueue = true;
-            logger.info(
-              `Removed crawl job ${bullJobId} from queue (state: ${state})`
-            );
+            try {
+              await existingJob.remove();
+              removedFromQueue = true;
+              logger.info(
+                `Removed crawl job ${jobId} from queue (state: ${state})`
+              );
+            } catch (removeErr) {
+              logger.warn(
+                `Could not remove job ${jobId} from queue: ${removeErr.message}`
+              );
+            }
           } else if (state === "active") {
+            jobFoundAndActive = true;
             logger.info(
-              `Crawl job ${bullJobId} is active in worker; signaling stop via DB`
+              `Crawl job ${jobId} is active (locked by worker); sending stop signal via jobManager`
             );
+            // removedFromQueue stays false; jobManager.stopJob will signal the worker to stop
           }
         }
       }
 
       const stopped = await this.jobManager.stopJob(activityId);
-      if (stopped || removedFromQueue) {
+      if (stopped || removedFromQueue || jobFoundAndActive) {
         logger.info(`Crawl stopped for activity ${activityId}`);
         return {
           success: true,

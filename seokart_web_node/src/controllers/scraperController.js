@@ -25,6 +25,8 @@ const crawlV2Phase1Queue = require("../queue/crawlV2Phase1Queue");
 const crawlV2Config = require("../config/crawl-v2");
 const crypto = require("crypto");
 const { emitToUser } = require("../services/socket-emitter");
+const DuplicateProcessorV2 = require("../processors/duplicate-processor-v2");
+const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
 
 const MAX_SITEMAP_URLS = 500;
 const JOB_LOCK_DURATION_MS = 2 * 60 * 60 * 1000;
@@ -721,11 +723,18 @@ const handleSingleUrlCrawl = async (req, res) => {
       });
     }
 
-    const userPlan = await UserPlan.findOne({ userId }).select("webCrawler").lean();
+    const userPlan = await UserPlan.findOne({ userId }).select("webCrawler")
     if (!userPlan) {
       return res.status(404).json({
         success: false,
         message: "User plan not found",
+      });
+    }
+    let userActivity = await UserActivity.findOne({ userId, websiteUrl: websiteUrl.trim() });
+    if (!userActivity) {
+      return res.status(404).json({
+        success: false,
+        message: "User activity not found",
       });
     }
 
@@ -737,7 +746,8 @@ const handleSingleUrlCrawl = async (req, res) => {
     }
 
     // Initialize processors
-    const duplicateProcessor = new DuplicateProcessor();
+    // const duplicateProcessor = new DuplicateProcessor();
+    const duplicateProcessor = new DuplicateProcessorV2();
     const linkProcessor = new LinkProcessor();
     const scoreCalculator = new ScoreCalculator();
     const grammarChecker = new GrammarSpellChecker();
@@ -791,13 +801,13 @@ const handleSingleUrlCrawl = async (req, res) => {
     );
 
     // Calculate SEO scores using the new system
-    console.log("Calculating SEO scores...");
-    const scoreResult = scoreCalculator.calculateNewSystemScores({
-      ...scrapedData,
-      grammarSpelling: grammarSpellIssues,
-      duplicates: {},
-      brokenLinks: [],
-    });
+    // console.log("Calculating SEO scores...");
+    // const scoreResult = scoreCalculator.calculateNewSystemScores({
+    //   ...scrapedData,
+    //   grammarSpelling: grammarSpellIssues,
+    //   duplicates: {},
+    //   brokenLinks: [],
+    // });
 
     // Process links and get broken links
     console.log("Processing links...");
@@ -823,22 +833,58 @@ const handleSingleUrlCrawl = async (req, res) => {
       wordCount: scrapedData.wordCount,
     };
 
-    const duplicateResults = await duplicateProcessor.findDuplicates(
-      [currentWebpageData],
-      userId,
-      websiteUrl
-    );
+    // const duplicateResults = await duplicateProcessor.findDuplicates(
+    //   [currentWebpageData],
+    //   userId,
+    //   websiteUrl
+    // );
+    // Build store from all other webpages (chunked), then get current page's duplicates in one call.
+    const slowAnalyzer = new SlowAnalyzerJobV2();
+    let signatureStore = duplicateProcessor._emptyStore(userActivity._id.toString());
+    let lastIdPass2 = null;
+    const chunkSize = 2000;
+
+    while (true) {
+      const chunk = await slowAnalyzer.getWebpagesChunkAfter(userActivity._id.toString(), lastIdPass2, chunkSize);
+      if (!chunk.length) break;
+      try {
+        const { updatedStore } = await duplicateProcessor._buildStoreOnly(chunk, signatureStore);
+        signatureStore = updatedStore;
+        lastIdPass2 = chunk.at(-1)._id;
+      } catch (err) {
+        logger.error("Error building duplicate store", err);
+        break;
+      }
+    }
+
+    let currentPageDuplicates = {
+      titleDuplicates: [],
+      descriptionDuplicates: [],
+      contentDuplicates: [],
+    };
+    try {
+      const { duplicateResults } = await duplicateProcessor.findDuplicatesWithStore(
+        [currentWebpageData],
+        signatureStore,
+      );
+      currentPageDuplicates = duplicateResults.get(webpageCore._id.toString()) ?? currentPageDuplicates;
+    } catch (err) {
+      logger.error("Error finding duplicates for current page", err);
+    }
+    // ========================== Duplicate check end =====================
 
     // Recalculate scores with complete data including duplicates and broken links
     const finalScoreResult = scoreCalculator.calculateNewSystemScores({
       ...scrapedData,
       grammarSpelling: grammarSpellIssues,
-      duplicates: duplicateResults.get(webpageCore._id.toString()),
+      duplicates: currentPageDuplicates,
       noHttpLinks: linkResults.noHttpLinks,
       internalBrokenLinks: linkResults.internalBrokenLinks,
       externalBrokenLinks: linkResults.externalBrokenLinks,
       noRedirectLinks: linkResults.redirectLinks,
     });
+
+    console.log("Final score result", finalScoreResult);
 
 
     // Update WebpageCore
@@ -848,7 +894,7 @@ const handleSingleUrlCrawl = async (req, res) => {
         statusCode: scrapedData.statusCode || 200,
         lastCrawled: new Date(),
         scrapedAt: new Date(),
-        seoScore: finalScoreResult.totalScore,
+        seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
         seoGrade: finalScoreResult.grade,
         responseTime: scrapedData.responseTime || 0,
         hasErrors: false,
@@ -870,7 +916,7 @@ const handleSingleUrlCrawl = async (req, res) => {
         scrapedData.title.length >= 30 &&
         scrapedData.title.length <= 60
       ),
-      titleDuplicated: duplicateResults.titleDuplicates?.length > 0,
+      titleDuplicated: currentPageDuplicates.titleDuplicates?.length > 0,
       metaDescription: scrapedData.metaDescription || "",
       metaDescriptionLength: (scrapedData.metaDescription || "").length,
       metaDescriptionMissing: !scrapedData.metaDescription,
@@ -880,7 +926,7 @@ const handleSingleUrlCrawl = async (req, res) => {
         scrapedData.metaDescription.length <= 160
       ),
       metaDescriptionDuplicated:
-        duplicateResults.descriptionDuplicates?.length > 0,
+        currentPageDuplicates.descriptionDuplicates?.length > 0,
       content: scrapedData.content || "",
       wordCount: scrapedData.wordCount || 0,
       contentTooShort: (scrapedData.wordCount || 0) < 300,
@@ -923,7 +969,7 @@ const handleSingleUrlCrawl = async (req, res) => {
     // Update or create WebpageScores
     const scoresData = {
       webpageCoreId: webpageCore._id,
-      seoScore: finalScoreResult.totalScore,
+      seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
       seoGrade: finalScoreResult.grade,
       scores: finalScoreResult.scores,
       lastCalculated: new Date(),
@@ -1003,9 +1049,9 @@ const handleSingleUrlCrawl = async (req, res) => {
         altTextPercentage: scrapedData.images?.altTextPercentage || 0,
       },
       duplicates: {
-        titleDuplicates: duplicateResults.titleDuplicates || [],
-        descriptionDuplicates: duplicateResults.descriptionDuplicates || [],
-        contentDuplicates: duplicateResults.contentDuplicates || [],
+        titleDuplicates: currentPageDuplicates.titleDuplicates || [],
+        descriptionDuplicates: currentPageDuplicates.descriptionDuplicates || [],
+        contentDuplicates: currentPageDuplicates.contentDuplicates || [],
       },
       contentQuality: {
         spellingErrors: grammarSpellIssues.spellingErrors || [],
@@ -1042,7 +1088,7 @@ const handleSingleUrlCrawl = async (req, res) => {
 
     // Update user plan usage (1 page crawled)
     try {
-      const userPlan = await UserPlan.findOne({ userId });
+      // const userPlan = await UserPlan.findOne({ userId });
       if (userPlan) {
         await userPlan.incrementUsage("webCrawler", "pages", 1);
       }
@@ -1056,7 +1102,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       message: "Webpage successfully crawled and updated",
       data: {
         pageUrl,
-        seoScore: finalScoreResult.totalScore,
+        seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
         seoGrade: finalScoreResult.grade,
         // lastCrawled: updatedCore.lastCrawled
         issues: {
@@ -1065,9 +1111,9 @@ const handleSingleUrlCrawl = async (req, res) => {
           externalBrokenLinks: linkResults.externalBrokenLinks.length, // CHANGED
           redirectLinks: linkResults.redirectLinks.length, // NEW
           duplicates: {
-            titles: duplicateResults.titleDuplicates?.length || 0,
-            descriptions: duplicateResults.descriptionDuplicates?.length || 0,
-            content: duplicateResults.contentDuplicates?.length || 0,
+            titles: currentPageDuplicates.titleDuplicates?.length || 0,
+            descriptions: currentPageDuplicates.descriptionDuplicates?.length || 0,
+            content: currentPageDuplicates.contentDuplicates?.length || 0,
           },
         },
         linkDetails: {
