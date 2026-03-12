@@ -30,7 +30,7 @@ export default function RootLayout({
   const shouldShowLayout = !noLayoutRoutes.includes(pathname);
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${inter.className} bg-background`}>
         <ReduxProvider>
 

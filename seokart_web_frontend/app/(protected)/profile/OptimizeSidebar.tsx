@@ -139,7 +139,7 @@ const AccordionItem = ({ label, isSuccess, hasError, errorContent }: AccordionIt
             opacity: isOpen ? 1 : 0,
           }}
         >
-          <div className="mt-3 ml-6 p-4 bg-red-50 rounded-lg border border-red-200">
+          <div className="mt-3 ml-6 p-4 bg-red-50 rounded-lg border border-red-200 max-w-[550px]">
             {errorContent}
           </div>
         </div>
@@ -458,7 +458,7 @@ export default function OptimizeSidebar({ webpage }: Props) {
                               {link.url}
                             </a>
                             <div className="flex justify-between items-center mt-1">
-                              <span className="text-xs text-gray-600">{link.text}</span>
+                              <span className="text-xs text-gray-600 max-w-[300px] overflow-x-hidden overflow-y-auto text-ellipsis">{link.text}</span>
                               <span className="text-xs text-red-600 font-medium">Status: {link.statusCode}</span>
                             </div>
                           </div>
@@ -490,7 +490,7 @@ export default function OptimizeSidebar({ webpage }: Props) {
                               {link.url}
                             </a>
                             <div className="flex justify-between items-center mt-1">
-                              <span className="text-xs text-gray-600">{link.text}</span>
+                              <span className="text-xs text-gray-600 max-w-[300px] overflow-y-auto overflow-x-hidden text-ellipsis ">{link.text}</span>
                               <span className="text-xs text-red-600 font-medium">Status: {link.statusCode}</span>
                             </div>
                           </div>
@@ -522,9 +522,9 @@ export default function OptimizeSidebar({ webpage }: Props) {
                               {link.url}
                             </a>
                             <div className="mt-1">
-                              <span className="text-xs text-gray-600">{link.text}</span>
+                              <span className="text-xs text-gray-600 max-w-[300px] overflow-y-auto text-ellipsis overflow-x-hidden">{link.text}</span>
                               <div className="flex justify-between items-center mt-1">
-                                <span className="text-xs text-orange-600">→ {link.redirectTo}</span>
+                                <span className="text-xs text-orange-600 max-w-[300px] overflow-y-auto text-ellipsis overflow-x-hidden">→ {link.redirectTo}</span>
                                 <span className="text-xs text-orange-600 font-medium">Status: {link.statusCode}</span>
                               </div>
                             </div>
