@@ -10,6 +10,7 @@ const { initEmitter, emitToUser } = require("../services/socket-emitter");
 const LinkProcessor = require("../processors/link-processor");
 const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
 const crawlV2Config = require("../config/crawl-v2");
+const scraperConfig = require("../config/scraper");
 const logger = require("../config/logger");
 
 let initialized = false;
@@ -62,7 +63,8 @@ module.exports = async function (job) {
   }
 
   try {
-    await LinkProcessor.clearActivityLinkCache(redis, activityId);
+    const linkCachePrefix = scraperConfig.link_validation_cache?.key_prefix;
+    await LinkProcessor.clearActivityLinkCache(redis, activityId, linkCachePrefix);
   } catch (clearErr) {
     logger.warn("Link cache cleanup failed (non-fatal)", { activityId, err: clearErr?.message });
   }

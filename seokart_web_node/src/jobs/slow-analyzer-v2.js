@@ -238,7 +238,7 @@ class SlowAnalyzerJobV2 {
     try {
       const baseQuery = {
         userActivityId,
-        slowAnalysisCompleted: { $ne: true },
+        // slowAnalysisCompleted: { $ne: true },
         hasErrors: { $ne: true },
         isProcessed: true,
       };
@@ -450,9 +450,9 @@ class SlowAnalyzerJobV2 {
 
         if (!signatureStore) {
           signatureStore = this.duplicateProcessorV2._emptyStore(userActivityId);
-          if (this.duplicateProcessorV2.redis) {
-            await this.duplicateProcessorV2._clearRedisStore(signatureStore);
-          }
+          // if (this.duplicateProcessorV2.redis) {
+          //   await this.duplicateProcessorV2._clearRedisStore(signatureStore);
+          // }
         }
 
         while (true) {
@@ -581,7 +581,7 @@ class SlowAnalyzerJobV2 {
         try {
           await Promise.allSettled([
             this.runGrammarCheckChunk(chunk, userId, userActivityId),
-            this.validateLinksChunk(chunk, userId, userActivityId, totalCount),
+            this.validateLinksChunk(chunk, userId, userActivityId, totalCount, { activityId: userActivityId }),
           ]);
           await this.recalculateScoresChunk(chunk, userId, userActivityId);
         } catch (err) {
@@ -708,13 +708,14 @@ class SlowAnalyzerJobV2 {
     }
   }
 
-  async validateLinksChunk(chunk, userId, userActivityId, totalCount) {
+  async validateLinksChunk(chunk, userId, userActivityId, totalCount, chunkOptions = {}) {
     const batchSize = config.batch_sizes.link_validation || 30;
     const concurrency =
       config.concurrency.link_validation ||
       config.concurrency.slow_analyzer ||
       5;
     const limit = this.createConcurrencyLimiter(concurrency);
+    const linkOptions = { activityId: chunkOptions.activityId ?? userActivityId };
     for (let i = 0; i < chunk.length; i += batchSize) {
       const batch = chunk.slice(i, i + batchSize);
       const completeMap = await this.getCompleteWebpageDataBatch(
@@ -734,7 +735,7 @@ class SlowAnalyzerJobV2 {
               return { webpageId: webpage._id, linkResults: emptyResult };
             }
             const linkResults =
-              await this.linkProcessor.validatePageLinks(completeWebpage);
+              await this.linkProcessor.validatePageLinks(completeWebpage, linkOptions);
             return { webpageId: webpage._id, linkResults };
           }),
         ),

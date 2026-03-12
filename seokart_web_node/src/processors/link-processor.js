@@ -34,7 +34,7 @@ class LinkProcessor {
     this._redisSet = this.redis ? this.redis.set.bind(this.redis) : null;
   }
 
-  async validatePageLinks(webpage) {
+  async validatePageLinks(webpage, options = {}) {
     try {
       const pageUrl = webpage.pageUrl || webpage.url;
       const websiteUrl = webpage.websiteUrl;
@@ -67,7 +67,8 @@ class LinkProcessor {
       const results = await this.validateLinksWithRateLimit(
         links,
         pageUrl,
-        websiteUrl
+        websiteUrl,
+        options
       );
       endTime = Date.now();
       duration = endTime - startTime;
@@ -176,7 +177,7 @@ class LinkProcessor {
     }
   }
 
-  async validateLinksWithRateLimit(links, pageUrl, websiteUrl) {
+  async validateLinksWithRateLimit(links, pageUrl, websiteUrl, options = {}) {
     if (!links.length) return { internalBrokenLinks: [], externalBrokenLinks: [], redirectLinks: [] };
   
     const internalBrokenLinks = [];
@@ -193,7 +194,7 @@ class LinkProcessor {
       links.map(link =>
         limit(async () => {
           try {
-            const result = await this.validateLink(link, pageUrl, websiteUrl);
+            const result = await this.validateLink(link, pageUrl, websiteUrl, options);
             if (!result) return;
   
             if (result.isRedirect) {
@@ -216,7 +217,7 @@ class LinkProcessor {
     return { internalBrokenLinks, externalBrokenLinks, redirectLinks };
   }
 
-  async validateLink(link, pageUrl, websiteUrl) {
+  async validateLink(link, pageUrl, websiteUrl, options = {}) {
     try {
       this.stats.linksChecked++;
 
@@ -238,7 +239,7 @@ class LinkProcessor {
       }
 
       const linkType = this.getLinkType(absoluteUrl, websiteUrl);
-      const linkStatus = await this.checkLinkStatus(absoluteUrl, this.timeout);
+      const linkStatus = await this.checkLinkStatus(absoluteUrl, this.timeout, options);
 
       if (linkStatus.isRedirect) {
         return {
@@ -298,7 +299,7 @@ class LinkProcessor {
   }
 
   /** Normalize URL for cache key: strip fragment; use hash if URL too long. */
-  _linkCacheKey(url) {
+  _linkCacheKey(url, activityId = null) {
     if (!url || typeof url !== "string") return null;
     let normalized = url.trim();
     try {
@@ -308,17 +309,19 @@ class LinkProcessor {
     } catch {
       return null;
     }
-    const prefix = this._cacheConfig.key_prefix || "lv:";
+    const rawPrefix = this._cacheConfig.key_prefix || "lv:";
+    const basePrefix =
+      activityId != null ? `${rawPrefix}${String(activityId)}:` : rawPrefix;
     const maxLen = this._cacheConfig.max_key_length ?? 400;
-    if (normalized.length <= maxLen) return prefix + normalized;
+    if (normalized.length <= maxLen) return basePrefix + normalized;
     const hash = crypto.createHash("sha256").update(normalized).digest("hex");
-    return prefix + "h:" + hash;
+    return basePrefix + "h:" + hash;
   }
 
   /** Get cached link status. Returns null on miss or error. */
-  async _getLinkCache(url) {
+  async _getLinkCache(url, activityId = null) {
     if (!this._redisGet || !this._cacheConfig.enabled) return null;
-    const key = this._linkCacheKey(url);
+    const key = this._linkCacheKey(url, activityId);
     if (!key) return null;
     try {
       const raw = await this._redisGet(key);
@@ -337,11 +340,11 @@ class LinkProcessor {
     }
   }
 
-  /** Set cached link status. No-op on error. */
-  async _setLinkCache(url, result) {
+  /** Set cached link status under an activity-specific key (if activityId provided). */
+  async _setLinkCache(url, result, activityId = null) {
     if (!this._redisSet || !this._cacheConfig.enabled || result == null)
       return;
-    const key = this._linkCacheKey(url);
+    const key = this._linkCacheKey(url, activityId);
     if (!key) return;
     const ttl = Math.max(60, this._cacheConfig.ttl_seconds ?? 1800);
     const payload = JSON.stringify({
@@ -353,13 +356,13 @@ class LinkProcessor {
     });
     try {
       await this._redisSet(key, payload, "EX", ttl);
-      logger.debug("Link cache set successfully");
+      logger.info("Link cache set successfully");
     } catch (err) {
-      logger.debug("Link cache set failed (non-fatal)", { key: key.slice(0, 50), err: err?.message });
+      logger.error("❌ Link cache set failed (non-fatal)", { err: err?.message });
     }
   }
 
-  async checkLinkStatus(url, timeout) {
+  async checkLinkStatus(url, timeout, options = {}) {
     // Fast path: if we already know this domain is dead, do not waste more requests.
     // const cachedDead = this._isDomainDead(url);
     // if (cachedDead === true) {
@@ -371,11 +374,12 @@ class LinkProcessor {
     //   };
     // }
 
-    // Redis cache: same URL validated once per TTL across all pages/users
+    // Redis cache: same URL validated once per TTL within an activity
     try {
-      const cached = await this._getLinkCache(url);
+      const activityId = options.activityId ?? null;
+      const cached = await this._getLinkCache(url, activityId);
       if (cached) {
-        logger.debug("Link cache hit for URL:", url);
+        logger.info("Link cache hit for URL:", url);
         return cached;
       }
     } catch {
@@ -383,6 +387,7 @@ class LinkProcessor {
     }
     if (this._cacheConfig.enabled && this._redisGet) this.stats.linkCacheMisses++;
 
+    const activityId = options.activityId ?? null;
     const baseConfig = {
       timeout,
       maxRedirects: 0,
@@ -396,7 +401,7 @@ class LinkProcessor {
       // if (!parsed.isBroken && !parsed.isRedirect) {
       //   this._markDomain(url, false);
       // }
-      await this._setLinkCache(url, parsed);
+      await this._setLinkCache(url, parsed, activityId);
       return parsed;
     } catch {
       // HEAD not supported by server, fall back to GET
@@ -412,7 +417,7 @@ class LinkProcessor {
       // if (!parsed.isBroken && !parsed.isRedirect) {
       //   this._markDomain(url, false);
       // }
-      await this._setLinkCache(url, parsed);
+      await this._setLinkCache(url, parsed, activityId);
       return parsed;
     } catch (err) {
       // this._markDomain(url, true);
@@ -422,7 +427,7 @@ class LinkProcessor {
         statusCode: 0,
         error: err.code || err.message || "Connection failed",
       };
-      await this._setLinkCache(url, parsed);
+      await this._setLinkCache(url, parsed, activityId);
       return parsed;
     }
   }
@@ -491,6 +496,48 @@ class LinkProcessor {
       linkCacheHits: 0,
       linkCacheMisses: 0,
     };
+  }
+
+  /**
+   * Delete all link cache keys recorded for this activity. Call after crawl completes
+   * so the next recrawl gets fresh validation (no stale broken-link cache).
+   * Uses same key_prefix as config so activity keys live under same namespace as cache keys.
+   * @param {object} redis - ioredis client
+   * @param {string|object} activityId - activity id
+   * @param {string} [keyPrefix] - optional key_prefix (e.g. from config.link_validation_cache.key_prefix); default "lv:"
+   */
+  static async clearActivityLinkCache(redis, activityId, keyPrefix) {
+    if (!redis || activityId == null) return;
+    try {
+      const prefix = keyPrefix || "lv:";
+      const pattern = `${prefix}${String(activityId)}:*`;
+      const BATCH = 500;
+      let cursor = "0";
+      let totalDeleted = 0;
+
+      do {
+        const [nextCursor, keys] = await redis.scan(
+          cursor,
+          "MATCH",
+          pattern,
+          "COUNT",
+          BATCH,
+        );
+        cursor = nextCursor;
+        if (keys && keys.length > 0) {
+          await redis.del(...keys);
+          totalDeleted += keys.length;
+        }
+      } while (cursor !== "0");
+
+      if (totalDeleted > 0) {
+        logger.info(
+          `Cleared ${totalDeleted} link cache keys for activity ${activityId}`,
+        );
+      }
+    } catch (err) {
+      logger.warn("clearActivityLinkCache failed (non-fatal)", { activityId, err: err?.message });
+    }
   }
 }
 
