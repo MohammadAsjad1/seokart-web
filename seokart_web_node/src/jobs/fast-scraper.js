@@ -6,7 +6,11 @@ const ActivityService = require("../services/activity-service");
 const config = require("../config/scraper");
 const logger = require("../config/logger");
 const axios = require("axios");
-const {scraperService} = require("../services/scraper-service");
+// Lazy require to avoid circular dependency in worker process
+function getScraperService() {
+  const { scraperService } = require("../services/scraper-service");
+  return scraperService;
+}
 
 const scraper = new WebScraper();
 
@@ -171,10 +175,8 @@ class FastScraperJob {
         userId
       );
 
-      // Find all webpages that were created but not fully processed
-      // const incompleteWebpages =
-      //   await this.webpageService.findIncompleteWebpages(userActivityId);
-      const incompleteWebpages = await scraperService.findIncompleteWebpages(userActivityId);
+      // Find all webpages that were created but not fully processed (lazy require for worker process)
+      const incompleteWebpages = await getScraperService().findIncompleteWebpages(userActivityId);
       if (!incompleteWebpages || incompleteWebpages.length === 0) {
         logger.info("No incomplete webpages found", userId);
         return { updated: 0 };
@@ -190,7 +192,7 @@ class FastScraperJob {
       //   userActivityId,
       //   "Scraping stopped before completion"
       // );
-      const updateResult = await scraperService.markWebpagesAsFailed(
+      const updateResult = await getScraperService().markWebpagesAsFailed(
         userActivityId,
         "Scraping stopped before completion"
       );
@@ -206,6 +208,7 @@ class FastScraperJob {
       };
     } catch (error) {
       logger.error("Error cleaning up incomplete webpages", error, userId);
+      console.log(error);
       return { updated: 0, error: error.message };
     }
   }

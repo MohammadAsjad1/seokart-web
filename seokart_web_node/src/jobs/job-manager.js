@@ -6,7 +6,11 @@ const { Sitemap } = require("../models/webpage-models");
 const logger = require("../config/logger");
 const WebpageService = require("../services/webpage-service");
 const crashRecoveryService = require("../services/crash-recovery-service");
-const {scraperService} = require("../services/scraper-service");
+// Lazy require to avoid circular dependency: scraper-service requires this module
+function getScraperService() {
+  const { scraperService } = require("../services/scraper-service");
+  return scraperService;
+}
 
 class JobManager {
   constructor() {
@@ -294,7 +298,7 @@ class JobManager {
       }
 
       // const incompleteCount = await this.webpageService.getIncompleteWebpagesCount(activityId);
-      const incompleteCount = await scraperService.getIncompleteWebpagesCount(activityId);
+      const incompleteCount = await getScraperService().getIncompleteWebpagesCount(activityId);
       
       if (incompleteCount === 0) {
         return { updated: 0, found: 0 };
@@ -347,16 +351,16 @@ class JobManager {
             lastUpdated: new Date(),
             errorMessages: [
               ...(activity.errorMessages || []),
-              "Stopped by user (recovered)",
+              "Stopped by user",
             ],
           });
 
           // Cleanup incomplete webpages
-          if (!this.webpageService) {
-            const WebpageService = require("../services/webpage-service");
-            this.webpageService = new WebpageService();
-          }
-          await this.webpageService.markWebpagesAsFailed(
+          // if (!this.webpageService) {
+          //   const WebpageService = require("../services/webpage-service");
+          //   this.webpageService = new WebpageService();
+          // }
+          await getScraperService().markWebpagesAsFailed(
             activityId,
             "Stopped by user"
           );
@@ -384,6 +388,7 @@ class JobManager {
 
       return true;
     } catch (error) {
+      console.log(error);
       logger.error(`Error stopping job for activity ${activityId}`, error);
       return false;
     }
