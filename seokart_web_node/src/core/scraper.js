@@ -7,16 +7,16 @@ const RateLimiter = require("./rate-limiter");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const RAW_PROXIES = [
-  "31.59.20.176:6754:rbakcvtn:vm589pwpk6we",
-  "23.95.150.145:6114:rbakcvtn:vm589pwpk6we",
-  "198.23.239.134:6540:rbakcvtn:vm589pwpk6we",
-  "45.38.107.97:6014:rbakcvtn:vm589pwpk6we",
-  "107.172.163.27:6543:rbakcvtn:vm589pwpk6we",
-  "198.105.121.200:6462:rbakcvtn:vm589pwpk6we",
-  "64.137.96.74:6641:rbakcvtn:vm589pwpk6we",  
-  "216.10.27.159:6837:rbakcvtn:vm589pwpk6we",
-  "142.111.67.146:5611:rbakcvtn:vm589pwpk6we",  
-  "194.39.32.164:6461:rbakcvtn:vm589pwpk6we",
+  "31.59.20.176:6754:atcwwnik:6i98ov4o1c5n",
+  "23.95.150.145:6114:atcwwnik:6i98ov4o1c5n",
+  "198.23.239.134:6540:atcwwnik:6i98ov4o1c5n",
+  "45.38.107.97:6014:atcwwnik:6i98ov4o1c5n",
+  "107.172.163.27:6543:atcwwnik:6i98ov4o1c5n",
+  "198.105.121.200:6462:atcwwnik:6i98ov4o1c5n",
+  "64.137.96.74:6641:atcwwnik:6i98ov4o1c5n",
+  "216.10.27.159:6837:atcwwnik:6i98ov4o1c5n",
+  "142.111.67.146:5611:atcwwnik:6i98ov4o1c5n",
+  "191.96.254.138:6185:atcwwnik:6i98ov4o1c5n",
 ];
 
 const PROXIES = RAW_PROXIES.map((p) => {
