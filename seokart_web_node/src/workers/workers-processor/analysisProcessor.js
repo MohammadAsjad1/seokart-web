@@ -5,10 +5,10 @@ dotenv.config({
   path: path.resolve(__dirname, "../../.env"),
 });
 
-const { connect } = require("../config/database");
-const SlowAnalyzerJob = require("../jobs/slow-analyzer");
-const { initEmitter, emitToUser } = require("../services/socket-emitter");
-const logger = require("../config/logger");
+const { connect } = require("../../config/database");
+const SlowAnalyzerJob = require("../../jobs/slow-analyzer");
+const { initEmitter, emitToUser } = require("../../services/socket-emitter");
+const logger = require("../../config/logger");
 
 let initialized = false;
 
@@ -37,7 +37,7 @@ module.exports = async function (job) {
   const result = await slowAnalyzerJob.analyzeWebpages(userId, activityId, websiteUrl);
   console.timeEnd("slow analyzer job")
 
-  const { emitUserActivitiesUpdate } = require("../controllers/scraperController");
+  const { emitUserActivitiesUpdate } = require("../../controllers/scraperController");
 
   emitToUser(userId, "analysis_completed", {
     activityId,

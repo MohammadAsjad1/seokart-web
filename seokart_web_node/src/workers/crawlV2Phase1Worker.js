@@ -6,7 +6,7 @@ const logger = require("../config/logger");
 
 const worker = new Worker(
   "crawlV2Phase1",
-  path.join(__dirname, "crawlV2Phase1Processor.js"),
+  path.join(__dirname, "workers-processor", "crawlV2Phase1Processor.js"),
   {
     connection,
     concurrency: crawlV2Config.phase1WorkerConcurrency,

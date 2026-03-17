@@ -4,7 +4,7 @@ const connection = require("../queue/connection");
 
 const worker = new Worker(
   "analysisQueue",
-  path.join(__dirname, "analysisProcessor.js"),
+  path.join(__dirname, "workers-processor", "analysisProcessor.js"),
   {
     connection,
     concurrency: parseInt(process.env.ANALYSIS_WORKER_CONCURRENCY, 10) || 1,

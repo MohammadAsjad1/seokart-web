@@ -4,16 +4,16 @@ const path = require("path");
 const dotenv = require("dotenv");
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
-const { connect } = require("../config/database");
-const { initEmitter, emitToUser } = require("../services/socket-emitter");
-const { scraperService } = require("../services/scraper-service");
-const SitemapService = require("../services/sitemap-service");
-const FastScraperJob = require("../jobs/fast-scraper");
-const { UserActivity } = require("../models/activity-models");
-const crawlV2Phase2Queue = require("../queue/crawlV2Phase2Queue");
-const crawlV2Config = require("../config/crawl-v2");
-const logger = require("../config/logger");
-const ValidationUtils = require("../utils/validation");
+const { connect } = require("../../config/database");
+const { initEmitter, emitToUser } = require("../../services/socket-emitter");
+const { scraperService } = require("../../services/scraper-service");
+const SitemapService = require("../../services/sitemap-service");
+const FastScraperJob = require("../../jobs/fast-scraper");
+const { UserActivity } = require("../../models/activity-models");
+const crawlV2Phase2Queue = require("../../queue/crawlV2Phase2Queue");
+const crawlV2Config = require("../../config/crawl-v2");
+const logger = require("../../config/logger");
+const ValidationUtils = require("../../utils/validation");
 
 let initialized = false;
 

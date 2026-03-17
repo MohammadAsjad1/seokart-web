@@ -8,9 +8,9 @@ dotenv.config({
 });
 
 
-const { connect } = require("../config/database");
-const { webCrawler } = require("../controllers/scraperController");
-const { initEmitter } = require("../services/socket-emitter");
+const { connect } = require("../../config/database");
+const { webCrawler } = require("../../controllers/scraperController");
+const { initEmitter } = require("../../services/socket-emitter");
 
 let initialized = false;
 /**

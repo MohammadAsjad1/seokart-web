@@ -15,7 +15,7 @@ const {
   WebpageTechnical,
   WebpageAnalysis,
 } = require("../models/webpage-models");
-
+  
 class SlowAnalyzerJobV2 {
   constructor(options = {}) {
     this.redis = options.redis ?? null;

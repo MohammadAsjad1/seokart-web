@@ -15,7 +15,7 @@ async function startServer() {
   try {
     // Connect to database
     await connect();
-    console.log("✅ Database connected");
+    console.log("✅ Database connected"); 
 
     // Initialize rank tracker scheduler
     await rankTrackerScheduler.init();

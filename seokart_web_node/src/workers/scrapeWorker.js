@@ -3,7 +3,7 @@ const { Worker } = require("bullmq");
 const connection = require("../queue/connection");
 const worker = new Worker(
   "scrapeQueue",
-  path.join(__dirname, "scrapeProcessor.js"), 
+  path.join(__dirname, "workers-processor", "scrapeProcessor.js"), 
   {
     connection,
     concurrency: parseInt(process.env.SCRAPER_WORKER_CONCURRENCY, 10) || 1, // creates 1 sandbox process
