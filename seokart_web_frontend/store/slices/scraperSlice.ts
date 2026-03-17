@@ -89,6 +89,9 @@ interface ScraperState {
   singleScrapeError: string | null;
   deleteLoading: { [activityId: string]: boolean };
   deleteError: string | null;
+  webpageDetailData: Webpage | null;
+  webpageDetailLoading: boolean;
+  webpageDetailError: string | null;
 }
 
 const initialState: ScraperState = {
@@ -105,6 +108,9 @@ const initialState: ScraperState = {
   singleScrapeError: null,
   deleteLoading: {},
   deleteError: null,
+  webpageDetailData: null,
+  webpageDetailLoading: false,
+  webpageDetailError: null,
 };
 
 export const startSitemapCrawl = createAsyncThunk(
@@ -212,6 +218,18 @@ export const fetchWebpages = createAsyncThunk(
           error.message ||
           "Failed to fetch webpages"
       );
+    }
+  }
+);
+
+export const fetchWebpageById = createAsyncThunk(
+  "scraper/fetchWebpageById",
+  async (webpageId: string, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get(`/webpage/detail/${webpageId}`);
+      return response.data;
+    } catch (error: any) {
+      return rejectWithValue(error.response?.data?.message || error.message || "Failed to fetch webpage");
     }
   }
 );
@@ -476,6 +494,18 @@ const scraperSlice = createSlice({
       })
       .addCase(stopSitemapCrawl.rejected, (state, action) => {
         state.error = action.payload as string;
+      })
+      .addCase(fetchWebpageById.pending, (state) => {
+        state.webpageDetailLoading = true;
+        state.webpageDetailError = null;
+      })
+      .addCase(fetchWebpageById.fulfilled, (state, action) => {
+        state.webpageDetailLoading = false;
+        state.webpageDetailData = action.payload;
+      })
+      .addCase(fetchWebpageById.rejected, (state, action) => {
+        state.webpageDetailLoading = false;
+        state.webpageDetailError = action.payload as string;
       });
   },
 });
