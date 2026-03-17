@@ -758,7 +758,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       userId,
       pageUrl,
       websiteUrl,
-    });
+    }).lean();
 
     if (!webpageCore) {
       return res.status(404).json({

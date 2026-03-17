@@ -28,9 +28,9 @@ module.exports = {
 
   /** Phase1 worker concurrency (jobs at a time per process) */
   phase1WorkerConcurrency:
-    parseInt(process.env.CRAWL_V2_PHASE1_WORKER_CONCURRENCY, 10) || 5,
+    parseInt(process.env.CRAWL_V2_PHASE1_WORKER_CONCURRENCY, 10) || 10,
 
   /** Phase2 worker concurrency */
   phase2WorkerConcurrency:
-    parseInt(process.env.CRAWL_V2_PHASE2_WORKER_CONCURRENCY, 10) || 10,
+    parseInt(process.env.CRAWL_V2_PHASE2_WORKER_CONCURRENCY, 10) || 5,
 };

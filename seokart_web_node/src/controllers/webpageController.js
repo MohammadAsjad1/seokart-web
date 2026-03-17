@@ -20,7 +20,7 @@ const getPaginatedWebpages = async (req, res) => {
       sort = "lastCrawled",
       order = "desc",
       filter,
-      include = "all",
+      include = "basic",
       search,
     } = req.query;
 
@@ -272,7 +272,7 @@ const getPaginatedWebpages = async (req, res) => {
       });
     }
 
-    const errorCounts = await getErrorCountsSummary(query);
+    const errorCounts = await getErrorCountsSummary(query, total);
 
     return res.status(200).json({
       success: true,
@@ -300,8 +300,8 @@ const getPaginatedWebpages = async (req, res) => {
 /**
  * Get error counts summary (NEW FUNCTION)
  */
-async function getErrorCountsSummary(baseQuery) {
-  const totalPages = await WebpageCore.countDocuments(baseQuery);
+async function getErrorCountsSummary(baseQuery , totalPages) {
+  // const totalPages = await WebpageCore.countDocuments(baseQuery);
 
   const [
     metaTagIssues,
@@ -368,6 +368,24 @@ async function getMetaTagIssuesCounts(baseQuery) {
       },
     },
     { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        "content.titleMissing": 1,
+        "content.titleRightLength": 1,
+        "content.metaDescriptionMissing": 1,
+        "content.metaDescriptionRightLength": 1,
+        "content.multipleTitles": 1,
+        "content.titleDuplicated": 1,
+        "content.metaDescriptionDuplicated": 1,
+        "scores.scores.titleNotMissing": 1,
+        "scores.scores.titleRightLength": 1,
+        "scores.scores.metaDescNotMissing": 1,
+        "scores.scores.metaDescRightLength": 1,
+        "scores.scores.noMultipleTitles": 1,
+        "scores.scores.titleNotDuplicated": 1,
+        "scores.scores.metaDescNotDuplicated": 1,
+      },
+    },
     {
       $group: {
         _id: null,
@@ -556,6 +574,19 @@ async function getContentIssuesCounts(baseQuery) {
     },
     { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
     {
+      $project: {
+        "content.contentTooShort": 1,
+        "content.oneH1Only": 1,
+        "content.headingsProperOrder": 1,
+        "analysis.contentQuality.spellingErrorsCount": 1,
+        "scores.scores.contentNotTooShort": 1,
+        "scores.scores.noGrammarSpellingErrors": 1,
+        "scores.scores.oneH1Only": 1,
+        "scores.scores.headingsProperOrder": 1,
+        "scores.scores.contentNotDuplicated": 1,
+      },
+    },
+    {
       $group: {
         _id: null,
         contentTooShort: {
@@ -676,6 +707,11 @@ async function getImageIssuesCounts(baseQuery) {
     },
     { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
     {
+      $project: {
+        "scores.scores.imagesHaveAltText": 1,
+      },
+    },
+    {
       $group: {
         _id: null,
         imagesMissingAlt: {
@@ -724,6 +760,16 @@ async function getBrokenLinkIssuesCounts(baseQuery) {
       },
     },
     { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        "technical.links.internalBrokenLinksCount": 1,
+        "technical.links.externalBrokenLinksCount": 1,
+        "technical.links.redirectLinksCount": 1,
+        "technical.links.httpLinksCount": 1,
+        "scores.scores.noInternalBrokenLinks": 1,
+        "scores.scores.noExternalBrokenLinks": 1,
+      },
+    },
     {
       $group: {
         _id: null,
@@ -833,6 +879,16 @@ async function getTechnicalIssuesCounts(baseQuery) {
       },
     },
     { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        "content.urlTooLong": 1,
+        "technical.technicalSeo.canonicalTagExists": 1,
+        "technical.performance.mobileResponsive": 1,
+        "scores.scores.urlNotTooLong": 1,
+        "scores.scores.canonicalTagExists": 1,
+        "scores.scores.mobileResponsive": 1,
+      },
+    },
     {
       $group: {
         _id: null,
@@ -1170,11 +1226,8 @@ const getWebpageById = async (req, res) => {
   try {
     const { id } = req.params;
     const { include = "all" } = req.query;
-    const userId = req.user
-      ? req.user._id
-      : new mongoose.Types.ObjectId("6618dde65a25055d0ff67579");
+    const userId = req.user.id
 
-    // Get core webpage data
     const webpage = await WebpageCore.findOne({
       _id: id,
       userId,
@@ -1203,7 +1256,7 @@ const getWebpageById = async (req, res) => {
 
       if (include === "technical" || include === "all") {
         populatePromises.push(
-          WebpageTechnical.findOne({ webpageCoreId: id }).lean()
+          WebpageTechnical.findOne({ webpageCoreId: id }, {"links.allLinks": 0}).lean()
         );
       } else {
         populatePromises.push(Promise.resolve(null));
