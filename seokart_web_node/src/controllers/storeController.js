@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 
 exports.installApp = async (req, res) => {
   const { code, context, scope } = req.query;
+ 
 
   console.log("[STORE-CONTROLLER] installApp called ------ ");
   
@@ -16,6 +17,7 @@ exports.installApp = async (req, res) => {
   }
 
   try {
+
     const data = await post("https://login.bigcommerce.com/oauth2/token", {
       client_id: process.env.BIG_COMMERCE_CLIENT_ID,
       client_secret: process.env.BIG_COMMERCE_CLIENT_SECRET,
@@ -26,13 +28,22 @@ exports.installApp = async (req, res) => {
       context,
     });
 
+console.log("getting token...", data )
+    
+
     const { access_token, user, context: storeHashData } = data;
     const storeHash = storeHashData.replace("stores/", "");
+    console.log("information ",access_token, user , context)
 
     const storeInfo = await get(
       `https://api.bigcommerce.com/stores/${storeHash}/v2/store`,
-      { "X-Auth-Token": access_token }
+      {
+        "X-Auth-Token": access_token,
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      }
     );
+    console.log("runinng...", storeInfo)
 
     const updatePayload = {
       access_token,
@@ -42,6 +53,8 @@ exports.installApp = async (req, res) => {
       email: user.email,
       username: `${storeInfo.first_name || ""} ${storeInfo.last_name || ""}`.trim(),
     };
+
+    console.log("runinng... 2 ")
 
     await User.findOneAndUpdate(
       { store_hash: storeHash },
@@ -58,11 +71,14 @@ exports.installApp = async (req, res) => {
     console.log("[STORE-CONTROLLER] app installed successfully ------ ", storeInfo.name);
     console.log("[STORE-CONTROLLER] Redirecting to BigCommerce dashboard ------ ", `https://store-${storeHash}.mybigcommerce.com/manage/app/${process.env.BIG_COMMERCE_APP_ID}`);
 
+    console.log(`https://store-${storeHash}.mybigcommerce.com/manage/app/${process.env.BIG_COMMERCE_APP_ID}`)
     //  Redirect to BigCommerce dashboard
     return res.redirect(
        `https://store-${storeHash}.mybigcommerce.com/manage/app/${process.env.BIG_COMMERCE_APP_ID}`
     );
+    console.log("endddd")
   } catch (err) {
+
     console.error("[STORE-CONTROLLER] Install app failed:", {
       message: err.message,
       status: err.response?.status,

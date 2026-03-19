@@ -1,12 +1,14 @@
 const path = require("path");
+const { pathToFileURL } = require("url");
 const { Worker } = require("bullmq");
 const connection = require("../queue/connection");
 const crawlV2Config = require("../config/crawl-v2");
 const logger = require("../config/logger");
 
+const processorPath = path.join(__dirname, "workers-processor", "crawlV2Phase2Processor.js");
 const worker = new Worker(
   "crawlV2Phase2",
-  path.join(__dirname, "workers-processor", "crawlV2Phase2Processor.js"),
+  pathToFileURL(processorPath),
   {
     connection,
     concurrency: crawlV2Config.phase2WorkerConcurrency,

@@ -161,7 +161,7 @@ class CrashRecoveryService {
           //   activity._id,
           //   "Job stalled - no heartbeat"
           // );
-          await scraperService.markWebpagesAsFailed(
+          await scraperService?.markWebpagesAsFailed(
             activity._id,
             "Job stalled - no heartbeat"
           );

@@ -7,6 +7,7 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   try {
     const signed = req.query.signed_payload_jwt;
+   
 
     if (!signed) return res.status(400).json({ success: false });
 
@@ -21,7 +22,7 @@ router.get("/", async (req, res) => {
       store_hash: payload.sub.replace("stores/", ""),
     }).select("-access_token");
 
-    if (!user) return res.status(401).json({ success: false });
+    if (!user) return res.status(401).json({ success: false , message : "User Not Found"});
 
     user.lastLogin = new Date();
     await user.save();
