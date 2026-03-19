@@ -27,6 +27,19 @@ const crypto = require("crypto");
 const { emitToUser } = require("../services/socket-emitter");
 const DuplicateProcessorV2 = require("../processors/duplicate-processor-v2");
 const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
+const Redis = require("ioredis");
+
+let duplicateRedisClient = null;
+function getDuplicateRedis() {
+  if (!duplicateRedisClient) {
+    duplicateRedisClient = new Redis({
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+      password: process.env.REDIS_PASSWORD || undefined,
+    });
+  }
+  return duplicateRedisClient;
+}
 
 const MAX_SITEMAP_URLS = 500;
 const JOB_LOCK_DURATION_MS = 2 * 60 * 60 * 1000;
@@ -747,7 +760,9 @@ const handleSingleUrlCrawl = async (req, res) => {
 
     // Initialize processors
     // const duplicateProcessor = new DuplicateProcessor();
-    const duplicateProcessor = new DuplicateProcessorV2();
+    const duplicateProcessor = new DuplicateProcessorV2({
+      redis: getDuplicateRedis(),
+    });
     const linkProcessor = new LinkProcessor();
     const scoreCalculator = new ScoreCalculator();
     const grammarChecker = new GrammarSpellChecker();
@@ -833,40 +848,40 @@ const handleSingleUrlCrawl = async (req, res) => {
       wordCount: scrapedData.wordCount,
     };
 
-    // const duplicateResults = await duplicateProcessor.findDuplicates(
-    //   [currentWebpageData],
-    //   userId,
-    //   websiteUrl
-    // );
-    // Build store from all other webpages (chunked), then get current page's duplicates in one call.
-    const slowAnalyzer = new SlowAnalyzerJobV2();
-    let signatureStore = duplicateProcessor._emptyStore(userActivity._id.toString());
-    let lastIdPass2 = null;
-    const chunkSize = 2000;
-
-    while (true) {
-      const chunk = await slowAnalyzer.getWebpagesChunkAfter(userActivity._id.toString(), lastIdPass2, chunkSize);
-      if (!chunk.length) break;
-      try {
-        const { updatedStore } = await duplicateProcessor._buildStoreOnly(chunk, signatureStore);
-        signatureStore = updatedStore;
-        lastIdPass2 = chunk.at(-1)._id;
-      } catch (err) {
-        logger.error("Error building duplicate store", err);
-        break;
-      }
-    }
-
+    // Duplicate detection: use Redis store when warm; otherwise rebuild once from DB (100k-safe).
+    const activityId = userActivity._id.toString();
+    const signatureStore = duplicateProcessor._emptyStore(activityId);
     let currentPageDuplicates = {
       titleDuplicates: [],
       descriptionDuplicates: [],
       contentDuplicates: [],
     };
+
+    const hasStore = await duplicateProcessor.isStoreInitialized(activityId);
+    if (!hasStore) {
+      // Store expired or never built — one-time chunked rebuild so duplicates are accurate.
+      const slowAnalyzer = new SlowAnalyzerJobV2({ redis: getDuplicateRedis() });
+      const chunkSize = 2000;
+      let lastId = null;
+      while (true) {
+        const chunk = await slowAnalyzer.getWebpagesChunkAfter(activityId, lastId, chunkSize, { includeAllProcessed: true });
+        if (!chunk.length) break;
+        try {
+          await duplicateProcessor._buildStoreOnly(chunk, signatureStore);
+          lastId = chunk.at(-1)._id;
+        } catch (err) {
+          logger.error("Error building duplicate store for single URL crawl", err);
+          break;
+        }
+      }
+    }
+
     try {
-      const { duplicateResults } = await duplicateProcessor.findDuplicatesWithStore(
-        [currentWebpageData],
-        signatureStore,
-      );
+      const { duplicateResults } =
+        await duplicateProcessor.findDuplicatesWithStore(
+          [currentWebpageData],
+          signatureStore,
+        );
       currentPageDuplicates = duplicateResults.get(webpageCore._id.toString()) ?? currentPageDuplicates;
     } catch (err) {
       logger.error("Error finding duplicates for current page", err);

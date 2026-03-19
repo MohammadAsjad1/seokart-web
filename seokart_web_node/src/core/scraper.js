@@ -469,36 +469,63 @@ class WebScraper {
       .trim();
   }
 
+  // extractMainContent($) {
+  //   let content = "";
+  //   const contentSelectors = [
+  //     "main",
+  //     "article",
+  //     '[role="main"]',
+  //     ".main-content",
+  //     ".content",
+  //     "#content",
+  //     ".post-content",
+  //     ".entry-content",
+  //     ".article-content",
+  //   ];
+
+  //   for (const selector of contentSelectors) {
+  //     const element = $(selector).first();
+  //     if (element.length) {
+  //       const text = element.text().trim();
+  //       if (text.length > content.length) {
+  //         content = text;
+  //       }
+  //     }
+  //   }
+
+  //   if (!content || content.length < 100) {
+  //     $("nav, header, footer, aside, .sidebar, .menu, .navigation").remove();
+  //     content = $("body").text().trim();
+  //   }
+
+  //   return content;
+  // }
   extractMainContent($) {
-    let content = "";
-    const contentSelectors = [
-      "main",
-      "article",
-      '[role="main"]',
-      ".main-content",
-      ".content",
-      "#content",
-      ".post-content",
-      ".entry-content",
-      ".article-content",
-    ];
-
-    for (const selector of contentSelectors) {
-      const element = $(selector).first();
-      if (element.length) {
-        const text = element.text().trim();
-        if (text.length > content.length) {
-          content = text;
-        }
+    // 1. Nuclear option for non-content tags
+    $("script, style, noscript, iframe, footer, header, nav, aside, .ads, .social").remove();
+  
+    // 2. Heuristic: Remove elements with high link density (Common in sidebars/menus)
+    $("div, ul, section").each((i, el) => {
+      const $el = $(el);
+      const textLength = $el.text().trim().length;
+      const linkLength = $el.find("a").text().trim().length;
+      
+      // If more than 50% of the text in a block is inside <a> tags, it's likely a menu
+      if (textLength > 0 && (linkLength / textLength) > 0.5) {
+        $el.remove();
       }
-    }
-
-    if (!content || content.length < 100) {
-      $("nav, header, footer, aside, .sidebar, .menu, .navigation").remove();
-      content = $("body").text().trim();
-    }
-
-    return content;
+    });
+  
+    // 3. Grab the largest remaining text block
+    let bestContent = "";
+    $("main, article, .content, #content, body").each((i, el) => {
+      const txt = $(el).text().trim();
+      if (txt.length > bestContent.length) {
+        bestContent = txt;
+      }
+    });
+  
+    return bestContent.replace(/\s+/g, " ");
   }
 
   extractHeadings($) {
@@ -623,8 +650,9 @@ class WebScraper {
         hasMediaQueries:
           $("style")
             .toArray()
-            .some((el) => $(el).html()?.includes("@media")) ||
-          $('link[rel="stylesheet"][href]').length > 0,
+            .some((el) => $(el).html()?.includes("@media")),
+          //   ||
+          // $('link[rel="stylesheet"][href]').length > 0,
       
         hasResponsiveUnits:
           $("style")

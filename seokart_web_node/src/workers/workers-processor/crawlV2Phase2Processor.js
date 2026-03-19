@@ -5,13 +5,13 @@ const dotenv = require("dotenv");
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 const Redis = require("ioredis");
-const { connect } = require("../config/database");
-const { initEmitter, emitToUser } = require("../services/socket-emitter");
-const LinkProcessor = require("../processors/link-processor");
-const SlowAnalyzerJobV2 = require("../jobs/slow-analyzer-v2");
-const crawlV2Config = require("../config/crawl-v2");
-const scraperConfig = require("../config/scraper");
-const logger = require("../config/logger");
+const { connect } = require("../../config/database");
+const { initEmitter, emitToUser } = require("../../services/socket-emitter");
+const LinkProcessor = require("../../processors/link-processor");
+const SlowAnalyzerJobV2 = require("../../jobs/slow-analyzer-v2");
+const crawlV2Config = require("../../config/crawl-v2");
+const scraperConfig = require("../../config/scraper");
+const logger = require("../../config/logger");
 
 let initialized = false;
 let redisClient = null;

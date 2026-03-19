@@ -232,16 +232,19 @@ class SlowAnalyzerJobV2 {
    * @param {string} userActivityId
    * @param {ObjectId|null} afterId   - last _id seen (null for first page)
    * @param {number}        limit
+   * @param {{ includeAllProcessed?: boolean }} [options] - if true, include all processed pages (no slowAnalysisCompleted filter). Use when building duplicate store for single-URL crawl.
    * @returns {Promise<Array>}
    */
-  async getWebpagesChunkAfter(userActivityId, afterId, limit) {
+  async getWebpagesChunkAfter(userActivityId, afterId, limit, options = {}) {
     try {
       const baseQuery = {
         userActivityId,
-        // slowAnalysisCompleted: { $ne: true },
         hasErrors: { $ne: true },
         isProcessed: true,
       };
+      if (!options.includeAllProcessed) {
+        baseQuery.slowAnalysisCompleted = { $ne: true };
+      }
 
       if (afterId) baseQuery._id = { $gt: afterId };
 
@@ -393,13 +396,13 @@ class SlowAnalyzerJobV2 {
     this.stats.startTime = Date.now();
 
     // ── Heartbeat ──────────────────────────────────────────────────────────
-    const heartbeat = setInterval(async () => {
-      try {
-        await this.activityService.updateHeartbeat(userActivityId);
-      } catch (e) {
-        logger.debug("Heartbeat error", { msg: e?.message });
-      }
-    }, this.HEARTBEAT_INTERVAL_MS);
+    // const heartbeat = setInterval(async () => {
+    //   try {
+    //     await this.activityService.updateHeartbeat(userActivityId);
+    //   } catch (e) {
+    //     logger.debug("Heartbeat error", { msg: e?.message });
+    //   }
+    // }, this.HEARTBEAT_INTERVAL_MS);
 
     try {
       // ── Setup ──────────────────────────────────────────────────────────
@@ -411,6 +414,7 @@ class SlowAnalyzerJobV2 {
 
       const totalCount = await WebpageCore.countDocuments({
         userActivityId,
+        slowAnalysisCompleted: { $ne: true },
         hasErrors: { $ne: true },
         isProcessed: true,
       });
@@ -649,7 +653,7 @@ class SlowAnalyzerJobV2 {
         totalTime,
       };
     } finally {
-      clearInterval(heartbeat);
+      // clearInterval(heartbeat);
     }
   }
 
