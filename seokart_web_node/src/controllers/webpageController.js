@@ -272,7 +272,7 @@ const getPaginatedWebpages = async (req, res) => {
       });
     }
 
-    const errorCounts = await getErrorCountsSummary(query, total);
+    // const errorCounts = await getErrorCountsSummary(query, total);
 
 
     return res.status(200).json({
@@ -1025,6 +1025,15 @@ const getErrorWebpages = async (req, res) => {
 
     const userId = req.user.id;
 
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const sortObj = {
+      [sort]: order === "desc" ? -1 : 1,
+      _id: order === "desc" ? -1 : 1,
+    };
+
     const baseQuery = {
       userId: new mongoose.Types.ObjectId(userId),
       userActivityId: new mongoose.Types.ObjectId(activityId),
@@ -1040,24 +1049,21 @@ const getErrorWebpages = async (req, res) => {
       });
     }
 
-    const parsedPage = parseInt(page);
-    const parsedLimit = parseInt(limit);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const sortObj = {};
-    sortObj[sort] = order === "desc" ? -1 : 1;
-    sortObj._id = order === "desc" ? -1 : 1;
-
-    // Execute aggregation pipeline
+    // 🔥 Aggregation pipeline
     const pipeline = [
       { $match: baseQuery },
+
+      // 👉 CONTENT
       {
         $lookup: {
           from: "webpage_contents",
-          localField: "_id",
-          foreignField: "webpageCoreId",
+          let: { id: "$_id" },
           pipeline: [
-            { $limit: 1 },
+            {
+              $match: {
+                $expr: { $eq: ["$webpageCoreId", "$$id"] },
+              },
+            },
             {
               $project: {
                 title: 1,
@@ -1069,18 +1075,28 @@ const getErrorWebpages = async (req, res) => {
                 headingsProperOrder: 1,
               },
             },
+            { $limit: 1 },
           ],
           as: "content",
         },
       },
-      { $unwind: { path: "$content", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          content: { $arrayElemAt: ["$content", 0] },
+        },
+      },
+
+      // 👉 TECHNICAL
       {
         $lookup: {
           from: "webpage_technical",
-          localField: "_id",
-          foreignField: "webpageCoreId",
+          let: { id: "$_id" },
           pipeline: [
-            { $limit: 1 },
+            {
+              $match: {
+                $expr: { $eq: ["$webpageCoreId", "$$id"] },
+              },
+            },
             {
               $project: {
                 "links.internalBrokenLinksCount": 1,
@@ -1090,18 +1106,28 @@ const getErrorWebpages = async (req, res) => {
                 "performance.mobileResponsive": 1,
               },
             },
+            { $limit: 1 },
           ],
           as: "technical",
         },
       },
-      { $unwind: { path: "$technical", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          technical: { $arrayElemAt: ["$technical", 0] },
+        },
+      },
+
+      // 👉 ANALYSIS
       {
         $lookup: {
           from: "webpage_analysis",
-          localField: "_id",
-          foreignField: "webpageCoreId",
+          let: { id: "$_id" },
           pipeline: [
-            { $limit: 1 },
+            {
+              $match: {
+                $expr: { $eq: ["$webpageCoreId", "$$id"] },
+              },
+            },
             {
               $project: {
                 "contentQuality.totalLanguageErrors": 1,
@@ -1134,300 +1160,81 @@ const getErrorWebpages = async (req, res) => {
                 },
               },
             },
+            { $limit: 1 },
           ],
           as: "analysis",
         },
       },
-      { $unwind: { path: "$analysis", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          analysis: { $arrayElemAt: ["$analysis", 0] },
+        },
+      },
+
+      // 👉 SCORES
       {
         $lookup: {
           from: "webpage_scores",
-          localField: "_id",
-          foreignField: "webpageCoreId",
-          pipeline: [{ $limit: 1 }, { $project: { scores: 1 } }],
+          let: { id: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$webpageCoreId", "$$id"] },
+              },
+            },
+            { $project: { scores: 1 } },
+            { $limit: 1 },
+          ],
           as: "scores",
         },
       },
-      { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
-      { $match: errorQuery },
       {
         $addFields: {
-          errorCounts: {
-            meta: {
-              $add: [
-                {
-                  $cond: [
-                    {
-                      $eq: [
-                        {
-                          $strLenCP: {
-                            $trim: {
-                              input: { $ifNull: ["$content.title", ""] },
-                            },
-                          },
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $or: [
-                        {
-                          $lt: [{ $ifNull: ["$content.titleLength", 0] }, 40],
-                        },
-                        {
-                          $gt: [{ $ifNull: ["$content.titleLength", 0] }, 60],
-                        },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $eq: [
-                        {
-                          $strLenCP: {
-                            $trim: {
-                              input: {
-                                $ifNull: ["$content.metaDescription", ""],
-                              },
-                            },
-                          },
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $or: [
-                        {
-                          $lt: [
-                            {
-                              $ifNull: ["$content.metaDescriptionLength", 0],
-                            },
-                            120,
-                          ],
-                        },
-                        {
-                          $gt: [
-                            {
-                              $ifNull: ["$content.metaDescriptionLength", 0],
-                            },
-                            160,
-                          ],
-                        },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                { $cond: ["$analysis.hasTitleDuplicates", 1, 0] },
-                { $cond: ["$analysis.hasDescDuplicates", 1, 0] },
-              ],
-            },
-            content: {
-              $add: [
-                {
-                  $cond: [
-                    {
-                      $and: [
-                        {
-                          $gt: [{ $ifNull: ["$content.wordCount", 0] }, 0],
-                        },
-                        {
-                          $lt: [{ $ifNull: ["$content.wordCount", 0] }, 200],
-                        },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $gt: [
-                        {
-                          $ifNull: [
-                            "$analysis.contentQuality.totalLanguageErrors",
-                            0,
-                          ],
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $ne: [
-                        {
-                          $ifNull: ["$content.headingStructure.h1Count", 0],
-                        },
-                        1,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $or: [
-                        { $eq: ["$content.headingsProperOrder", false] },
-                        { $eq: ["$scores.scores.headingsProperOrder", 0] },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                { $cond: ["$analysis.hasContentDuplicates", 1, 0] },
-              ],
-            },
-            image: {
-              $cond: [
-                {
-                  $gt: [
-                    { $ifNull: ["$analysis.images.altMissingCount", 0] },
-                    0,
-                  ],
-                },
-                1,
-                0,
-              ],
-            },
-            url: {
-              $add: [
-                {
-                  $cond: [
-                    {
-                      $gt: [
-                        { $strLenCP: { $ifNull: ["$pageUrl", ""] } },
-                        100,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $gt: [
-                        {
-                          $ifNull: [
-                            "$technical.links.internalBrokenLinksCount",
-                            0,
-                          ],
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $gt: [
-                        {
-                          $ifNull: [
-                            "$technical.links.externalBrokenLinksCount",
-                            0,
-                          ],
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $gt: [
-                        {
-                          $ifNull: ["$technical.links.redirectLinksCount", 0],
-                        },
-                        0,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-              ],
-            },
-            technical: {
-              $add: [
-                {
-                  $cond: [
-                    {
-                      $ne: [
-                        "$technical.technicalSeo.canonicalTagExists",
-                        true,
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-                {
-                  $cond: [
-                    {
-                      $ne: ["$technical.performance.mobileResponsive", true],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-              ],
-            },
-          },
+          scores: { $arrayElemAt: ["$scores", 0] },
         },
       },
+
+      // 👉 Apply error filter (still here, best if precomputed)
+      { $match: errorQuery },
+
+      // 👉 Final projection (skip heavy addFields for speed)
       {
         $project: {
           _id: 1,
           pageUrl: 1,
           seoScore: 1,
           "content.title": 1,
-          errorCounts: 1,
         },
       },
+
       { $sort: sortObj },
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: parsedLimit }],
-          totalCount: [{ $count: "total" }],
-        },
-      },
+      { $skip: skip },
+      { $limit: parsedLimit },
     ];
 
-    const [result] = await WebpageCore.aggregate(pipeline);
-    const total = result.totalCount[0]?.total || 0;
-    const webpages = result.data;
+    const webpages = await WebpageCore.aggregate(pipeline);
+
+    // 🔥 Separate count query (faster than $facet)
+    const total = await WebpageCore.aggregate([
+      { $match: baseQuery },
+      {
+        $lookup: {
+          from: "webpage_scores",
+          localField: "_id",
+          foreignField: "webpageCoreId",
+          as: "scores",
+        },
+      },
+      {
+        $addFields: {
+          scores: { $arrayElemAt: ["$scores", 0] },
+        },
+      },
+      { $match: errorQuery },
+      { $count: "total" },
+    ]);
+
+    const totalCount = total[0]?.total || 0;
 
     return res.status(200).json({
       success: true,
@@ -1435,10 +1242,10 @@ const getErrorWebpages = async (req, res) => {
         errorType,
         webpages,
         pagination: {
-          total,
+          total: totalCount,
           page: parsedPage,
           limit: parsedLimit,
-          pages: Math.ceil(total / parsedLimit),
+          pages: Math.ceil(totalCount / parsedLimit),
         },
       },
     });
@@ -1446,7 +1253,7 @@ const getErrorWebpages = async (req, res) => {
     console.error("Error in getErrorWebpages:", error);
     return res.status(500).json({
       success: false,
-      message: "An error occurred while fetching error webpages",
+      message: "Error fetching webpages",
       error: error.message,
     });
   }
@@ -1853,7 +1660,7 @@ const searchWebpages = async (req, res) => {
 /**
  * Bulk operations for webpage management
  */
-const bulkUpdateWebpages = async (req, res) => {          
+const bulkUpdateWebpages = async (req, res) => {
   try {
     const { activityId } = req.params;
     const { webpageIds, updates } = req.body;
