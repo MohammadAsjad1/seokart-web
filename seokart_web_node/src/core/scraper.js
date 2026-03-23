@@ -7,16 +7,16 @@ const RateLimiter = require("./rate-limiter");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const RAW_PROXIES = [
-  "31.59.20.176:6754:rbakcvtn:vm589pwpk6we",
-  "23.95.150.145:6114:rbakcvtn:vm589pwpk6we",
-  "198.23.239.134:6540:rbakcvtn:vm589pwpk6we",
-  "45.38.107.97:6014:rbakcvtn:vm589pwpk6we",
-  "107.172.163.27:6543:rbakcvtn:vm589pwpk6we",
-  "198.105.121.200:6462:rbakcvtn:vm589pwpk6we",
-  "64.137.96.74:6641:rbakcvtn:vm589pwpk6we",
-  "216.10.27.159:6837:rbakcvtn:vm589pwpk6we",
-  "142.111.67.146:5611:rbakcvtn:vm589pwpk6we",
-  "194.39.32.164:6461:rbakcvtn:vm589pwpk6we",
+  "31.59.20.176:6754:aeqauquw:xteoegagpap2",
+  "23.95.150.145:6114:aeqauquw:xteoegagpap2",
+  "198.23.239.134:6540:aeqauquw:xteoegagpap2",
+  "45.38.107.97:6014:aeqauquw:xteoegagpap2",
+  "107.172.163.27:6543:aeqauquw:xteoegagpap2",
+  "64.137.96.74:6641:aeqauquw:xteoegagpap2",
+  "198.105.121.200:6462:aeqauquw:xteoegagpap2",
+  "216.10.27.159:6837:aeqauquw:xteoegagpap2",
+  "142.111.67.146:5611:aeqauquw:xteoegagpap2",
+  "191.96.254.138:6185:aeqauquw:xteoegagpap2",
 ];
 
 const PROXIES = RAW_PROXIES.map((p) => {

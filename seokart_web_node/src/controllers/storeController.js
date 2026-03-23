@@ -17,13 +17,13 @@ exports.installApp = async (req, res) => {
   }
 
   try {
-
+console.log("starting to get token...")
     const data = await post("https://login.bigcommerce.com/oauth2/token", {
       client_id: process.env.BIG_COMMERCE_CLIENT_ID,
       client_secret: process.env.BIG_COMMERCE_CLIENT_SECRET,
       redirect_uri: `${process.env.BASE_URL}/store/install`,
       grant_type: "authorization_code",
-      code,
+      code, 
       scope,
       context,
     });

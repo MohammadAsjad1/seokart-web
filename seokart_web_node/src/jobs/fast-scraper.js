@@ -12,8 +12,6 @@ function getScraperService() {
   return scraperService;
 }
 
-const scraper = new WebScraper();
-
 class FastScraperJob {
   constructor() {
     this.scraper = new WebScraper();
@@ -34,6 +32,7 @@ class FastScraperJob {
   async processWebpages(urls, userId, userActivityId, websiteUrl, options = {}) {
     this.stats.startTime = Date.now();
     this.resetStats();
+    this.scraper.resetStopSignal();
 
     const skipGrammarAndScores = options.skipGrammarAndScores === true;
     logger.info(
@@ -541,7 +540,7 @@ class FastScraperJob {
     const timeout = options.timeout || config.timeouts.standard_request;
 
     try {
-      const response = await scraper.scrapeWebpage(url, {
+      const response = await this.scraper.scrapeWebpage(url, {
         // timeout: 30000,
         timeout: 10000,
       });
