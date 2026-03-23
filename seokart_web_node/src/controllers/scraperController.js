@@ -899,7 +899,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       noRedirectLinks: linkResults.redirectLinks,
     });
 
-    console.log("Final score result", finalScoreResult);
+    // console.log("Final score result", finalScoreResult);
 
 
     // Update WebpageCore

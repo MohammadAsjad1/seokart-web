@@ -212,6 +212,12 @@ const WebpageTechnicalSchema = new mongoose.Schema(
       structuredData: { type: Boolean, default: false },
       hasViewport: { type: Boolean, default: false },
       hasCharset: { type: Boolean, default: false },
+      responsiveChecks: {
+        hasViewport: { type: Boolean, default: false },
+        hasMediaQueries: { type: Boolean, default: false },
+        hasResponsiveFramework: { type: Boolean, default: false },
+        hasResponsiveUnits: { type: Boolean, default: false },
+      },
     },
 
     // Points 13, 14, 15, 16: Links analysis

@@ -628,6 +628,12 @@ class WebpageService {
           structuredData: technicalData.technicalSeo?.structuredData || false,
           hasViewport: technicalData.technicalSeo?.hasViewport || false,
           hasCharset: technicalData.technicalSeo?.hasCharset || false,
+          responsiveChecks: technicalData.technicalSeo?.responsiveChecks || {
+            hasViewport: false,
+            hasMediaQueries: false,
+            hasResponsiveFramework: false,
+            hasResponsiveUnits: false,
+          },
         },
 
         // Links analysis with new fields (allLinks stored at scrape for validation phase)

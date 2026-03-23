@@ -630,6 +630,9 @@ class WebScraper {
   }
 
   extractBasicTechnicalInfo($) {
+    const styles = $("style").toArray().map(el => $(el).html() || "");
+    const classes = $("[class]").toArray().map(el => $(el).attr("class") || "");
+    const viewportContent = $('meta[name="viewport"]').attr("content") || "";
     return {
       canonicalTagExists: $('link[rel="canonical"]').length > 0,
       canonicalUrl: $('link[rel="canonical"]').attr("href") || "",
@@ -641,30 +644,24 @@ class WebScraper {
       structuredData: $('script[type="application/ld+json"]').length > 0,
       hasH1: $("h1").length > 0,
       hasMetaDescription: $('meta[name="description"]').length > 0,
-      responsiveChecks: {
-        hasViewport:
-          $('meta[name="viewport"]')
-            .attr("content")
-            ?.includes("width=device-width") || false,
-      
+      responsiveChecks :{
+        hasViewport: /width\s*=\s*device-width/i.test(viewportContent),
+
         hasMediaQueries:
-          $("style")
-            .toArray()
-            .some((el) => $(el).html()?.includes("@media")),
-          //   ||
-          // $('link[rel="stylesheet"][href]').length > 0,
-      
+          styles.some(css => css.includes("@media")) ||
+          $('link[rel="stylesheet"]').length > 0,
+
         hasResponsiveUnits:
-          $("style")
-            .toArray()
-            .some((el) => /(vw|vh|%|em|rem|fr)/i.test($(el).html() || "")),
-      
+          styles.some(css =>
+            /(vw|vh|vmin|vmax|em|rem|fr|minmax|auto-fit|auto-fill)/i.test(css)
+          ),
+
         hasResponsiveFramework:
-          $('link[href*="bootstrap"], link[href*="tailwind"], link[href*="foundation"], link[href*="bulma"]').length > 0 ||
+          $('link[href*="bootstrap"], link[href*="tailwind"], link[href*="bulma"], link[href*="foundation"]').length > 0 ||
           $('script[src*="bootstrap"], script[src*="tailwind"]').length > 0 ||
-          /(bootstrap|tailwind|foundation|bulma)/i.test($('html').attr('class') || '') ||
-          $('[class]').toArray().some((el) =>
-            /\b(container|container-fluid|col-|row|grid-|flex-)/i.test($(el).attr('class') || '')
+          /(bootstrap|tailwind|bulma|foundation)/i.test($('html').attr('class') || '') ||
+          classes.some(cls =>
+            /\b(col-\d+|md:|lg:|xl:|grid-cols-|flex\b)/i.test(cls)
           ),
       },
     };

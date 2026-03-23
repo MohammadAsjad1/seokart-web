@@ -35,6 +35,8 @@ interface Webpage {
       internalBrokenLinksCount: number;
       externalBrokenLinksCount: number;
       redirectLinksCount: number;
+      httpLinksCount: number;
+      httpsLinksCount: number;
     };
     internalBrokenLinks: Array<{
       url: string;
@@ -89,12 +91,14 @@ interface Webpage {
       externalLinksBalanced: number;
       canonicalTagExists: number;
       mobileResponsive: number;
+      noHttpLinks: number;
     };
   };
 }
 
 type Props = {
   webpage?: Webpage;
+  isOpen?: boolean;
 };
 
 interface AccordionItemProps {
@@ -157,7 +161,7 @@ const AccordionItem = ({
   );
 };
 
-export default function OptimizeSidebar({ webpage }: Props) {
+export default function OptimizeSidebar({ webpage, isOpen }: Props) {
   if (!webpage) return null;
 
   const { webpageDetailData, webpageDetailLoading, webpageDetailError } =
@@ -165,12 +169,14 @@ export default function OptimizeSidebar({ webpage }: Props) {
   const dispatch = useAppDispatch();
 
   useEffect(() => {
-    if (webpage._id) {
+    // Re-fetch when the drawer opens, even if the same `webpage._id` is selected.
+    if (webpage._id && isOpen) {
       dispatch(fetchWebpageById(webpage._id));
     }
-  }, [webpage._id]);
+  }, [dispatch, webpage._id, isOpen]);
 
-  const webpageData = (webpageDetailData as unknown as { data: Webpage })?.data || {};
+  const webpageData =
+    (webpageDetailData as unknown as { data: Webpage })?.data || {};
 
   const parseSpellingError = (error: string) => {
     const match = error.match(/^(.+?)\s*\(suggestion:\s*(.+?)\)$/);
@@ -682,6 +688,24 @@ export default function OptimizeSidebar({ webpage }: Props) {
                             )}
                         </div>
                       )}
+                    </div>
+                  }
+                />
+
+                <AccordionItem
+                  label="No HTTP Links"
+                  isSuccess={
+                    webpageData.scores?.scores?.noHttpLinks  === 5
+                  }
+                  hasError={
+                    webpageData.scores?.scores?.noHttpLinks  !== 5
+                  }
+                  errorContent={
+                    <div>
+                      <p className="text-sm text-red-700 font-medium mb-2">
+                        HTTP Links Found:{" "}
+                        {webpageData.technical?.links?.httpLinksCount || 0}
+                      </p>
                     </div>
                   }
                 />

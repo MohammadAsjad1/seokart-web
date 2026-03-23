@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchWebpages, scrapeWebpage } from "@/store/slices/scraperSlice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -63,6 +63,13 @@ export default function AccordionContent({
 
   const [currentPage, setCurrentPage] = useState(1);
   const [limit] = useState(10);
+  // Avoid stale-closure issues when refetching after actions (like scrape)
+  // by always reading the latest currentPage at request time.
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  // If we manually trigger a fetch after scrape, we may also trigger the
+  // `currentPage` effect. This flag lets us skip that one redundant call.
+  const skipNextPageEffectFetchRef = useRef(false);
   const [initialized, setInitialized] = useState(false);
   const [activeTab, setActiveTab] = useState("webpages");
   const [errorCounts, setErrorCounts] = useState<any>(null);
@@ -105,7 +112,7 @@ export default function AccordionContent({
 
     const params: any = {
       activityId,
-      page: currentPage,
+      page: currentPageRef.current,
       limit,
       sort: sortField,
       order: sortOrder === "asc" ? "asc" : "desc",
@@ -128,7 +135,7 @@ export default function AccordionContent({
           setFetchError("Failed to load webpages. Please try again.");
         }
       });
-  }, [activityId, currentPage, limit, sortValue, searchTerm, dispatch]);
+  }, [activityId, limit, sortValue, searchTerm, dispatch]);
 
   const handleScrapeWebpage = useCallback(
     async (e: React.MouseEvent, webpage: any) => {
@@ -145,6 +152,11 @@ export default function AccordionContent({
 
         if(response){
           showToast("Webpage recrawled successfully", "success");
+          const willChangePage = currentPageRef.current !== 1;
+          currentPageRef.current = 1;
+          skipNextPageEffectFetchRef.current = willChangePage;
+          setCurrentPage(1);
+          // Manually refetch to ensure data updates even if we're already on page 1.
           fetchWebpagesWithFilters();
         }
       } catch (error: any) {
@@ -156,7 +168,7 @@ export default function AccordionContent({
         showToast(error?.message || error?.response?.data?.message || error?.error || "Failed to recrawl webpage", "error");
       }
     },
-    [dispatch]
+    [dispatch, fetchWebpagesWithFilters]
   );
 
   const handleExternalLinkClick = useCallback(
@@ -211,6 +223,10 @@ export default function AccordionContent({
   // Refetch when page or sort changes only (initialized not in deps to avoid double call when Effect 1 sets it)
   useEffect(() => {
     if (initialized && activityId && activeTab === "webpages") {
+      if (skipNextPageEffectFetchRef.current) {
+        skipNextPageEffectFetchRef.current = false;
+        return;
+      }
       fetchWebpagesWithFilters();
     }
   }, [currentPage, sortValue, activityId, activeTab]);
@@ -445,7 +461,7 @@ export default function AccordionContent({
                             >
                               <TableCell className="px-4 text-[13px]">
                                 <div className="flex items-center gap-2 group">
-                                  <span className="text-blue-600 group-hover:text-blue-800">
+                                  <span className="text-blue-600 group-hover:text-blue-800 truncate max-w-[500px] overflow-hidden text-ellipsis">
                                     {webpage.pageUrl}
                                   </span>
                                   <button
@@ -641,7 +657,9 @@ export default function AccordionContent({
         onOpenChange={setIsDrawerOpen}
         direction="right"
       >
-        {selectedWebpage && <OptimizeSidebar webpage={selectedWebpage} />}
+        {selectedWebpage && (
+          <OptimizeSidebar webpage={selectedWebpage} isOpen={isDrawerOpen} />
+        )}
       </Drawer>
     </>
   );

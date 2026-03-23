@@ -4,7 +4,6 @@ const { UserActivity } = require("../models/activity-models");
 const logger = require("../config/logger");
 const os = require("os");
 const crypto = require("crypto");
-const {scraperService} = require("./scraper-service");
 
 class CrashRecoveryService {
   constructor() {
@@ -84,6 +83,7 @@ class CrashRecoveryService {
           //   activity._id,
           //   "Server crash - incomplete processing"
           // );
+          const {scraperService} = require("./scraper-service");
           await scraperService.markWebpagesAsFailed(
             activity._id,
             "Server crash - incomplete processing"
@@ -161,6 +161,8 @@ class CrashRecoveryService {
           //   activity._id,
           //   "Job stalled - no heartbeat"
           // );
+
+          const {scraperService} = require("./scraper-service");
           await scraperService.markWebpagesAsFailed(
             activity._id,
             "Job stalled - no heartbeat"

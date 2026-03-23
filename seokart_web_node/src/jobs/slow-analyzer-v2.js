@@ -454,9 +454,9 @@ class SlowAnalyzerJobV2 {
 
         if (!signatureStore) {
           signatureStore = this.duplicateProcessorV2._emptyStore(userActivityId);
-          // if (this.duplicateProcessorV2.redis) {
-          //   await this.duplicateProcessorV2._clearRedisStore(signatureStore);
-          // }
+          if (this.duplicateProcessorV2.redis) {
+            await this.duplicateProcessorV2._clearRedisStore(signatureStore);
+          }
         }
 
         while (true) {
