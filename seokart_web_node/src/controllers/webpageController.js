@@ -1025,15 +1025,6 @@ const getErrorWebpages = async (req, res) => {
 
     const userId = req.user.id;
 
-    const parsedPage = parseInt(page);
-    const parsedLimit = parseInt(limit);
-    const skip = (parsedPage - 1) * parsedLimit;
-
-    const sortObj = {
-      [sort]: order === "desc" ? -1 : 1,
-      _id: order === "desc" ? -1 : 1,
-    };
-
     const baseQuery = {
       userId: new mongoose.Types.ObjectId(userId),
       userActivityId: new mongoose.Types.ObjectId(activityId),
@@ -1049,21 +1040,24 @@ const getErrorWebpages = async (req, res) => {
       });
     }
 
-    // 🔥 Aggregation pipeline
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const sortObj = {};
+    sortObj[sort] = order === "desc" ? -1 : 1;
+    sortObj._id = order === "desc" ? -1 : 1;
+
+    // Execute aggregation pipeline
     const pipeline = [
       { $match: baseQuery },
-
-      // 👉 CONTENT
       {
         $lookup: {
           from: "webpage_contents",
-          let: { id: "$_id" },
+          localField: "_id",
+          foreignField: "webpageCoreId",
           pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ["$webpageCoreId", "$$id"] },
-              },
-            },
+            { $limit: 1 },
             {
               $project: {
                 title: 1,
@@ -1075,28 +1069,18 @@ const getErrorWebpages = async (req, res) => {
                 headingsProperOrder: 1,
               },
             },
-            { $limit: 1 },
           ],
           as: "content",
         },
       },
-      {
-        $addFields: {
-          content: { $arrayElemAt: ["$content", 0] },
-        },
-      },
-
-      // 👉 TECHNICAL
+      { $unwind: { path: "$content", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "webpage_technical",
-          let: { id: "$_id" },
+          localField: "_id",
+          foreignField: "webpageCoreId",
           pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ["$webpageCoreId", "$$id"] },
-              },
-            },
+            { $limit: 1 },
             {
               $project: {
                 "links.internalBrokenLinksCount": 1,
@@ -1106,28 +1090,18 @@ const getErrorWebpages = async (req, res) => {
                 "performance.mobileResponsive": 1,
               },
             },
-            { $limit: 1 },
           ],
           as: "technical",
         },
       },
-      {
-        $addFields: {
-          technical: { $arrayElemAt: ["$technical", 0] },
-        },
-      },
-
-      // 👉 ANALYSIS
+      { $unwind: { path: "$technical", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "webpage_analysis",
-          let: { id: "$_id" },
+          localField: "_id",
+          foreignField: "webpageCoreId",
           pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ["$webpageCoreId", "$$id"] },
-              },
-            },
+            { $limit: 1 },
             {
               $project: {
                 "contentQuality.totalLanguageErrors": 1,
@@ -1160,81 +1134,300 @@ const getErrorWebpages = async (req, res) => {
                 },
               },
             },
-            { $limit: 1 },
           ],
           as: "analysis",
         },
       },
-      {
-        $addFields: {
-          analysis: { $arrayElemAt: ["$analysis", 0] },
-        },
-      },
-
-      // 👉 SCORES
+      { $unwind: { path: "$analysis", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "webpage_scores",
-          let: { id: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ["$webpageCoreId", "$$id"] },
-              },
-            },
-            { $project: { scores: 1 } },
-            { $limit: 1 },
-          ],
+          localField: "_id",
+          foreignField: "webpageCoreId",
+          pipeline: [{ $limit: 1 }, { $project: { scores: 1 } }],
           as: "scores",
         },
       },
+      { $unwind: { path: "$scores", preserveNullAndEmptyArrays: true } },
+      { $match: errorQuery },
       {
         $addFields: {
-          scores: { $arrayElemAt: ["$scores", 0] },
+          errorCounts: {
+            meta: {
+              $add: [
+                {
+                  $cond: [
+                    {
+                      $eq: [
+                        {
+                          $strLenCP: {
+                            $trim: {
+                              input: { $ifNull: ["$content.title", ""] },
+                            },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $or: [
+                        {
+                          $lt: [{ $ifNull: ["$content.titleLength", 0] }, 40],
+                        },
+                        {
+                          $gt: [{ $ifNull: ["$content.titleLength", 0] }, 60],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $eq: [
+                        {
+                          $strLenCP: {
+                            $trim: {
+                              input: {
+                                $ifNull: ["$content.metaDescription", ""],
+                              },
+                            },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $or: [
+                        {
+                          $lt: [
+                            {
+                              $ifNull: ["$content.metaDescriptionLength", 0],
+                            },
+                            120,
+                          ],
+                        },
+                        {
+                          $gt: [
+                            {
+                              $ifNull: ["$content.metaDescriptionLength", 0],
+                            },
+                            160,
+                          ],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                { $cond: ["$analysis.hasTitleDuplicates", 1, 0] },
+                { $cond: ["$analysis.hasDescDuplicates", 1, 0] },
+              ],
+            },
+            content: {
+              $add: [
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $gt: [{ $ifNull: ["$content.wordCount", 0] }, 0],
+                        },
+                        {
+                          $lt: [{ $ifNull: ["$content.wordCount", 0] }, 200],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $gt: [
+                        {
+                          $ifNull: [
+                            "$analysis.contentQuality.totalLanguageErrors",
+                            0,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $ne: [
+                        {
+                          $ifNull: ["$content.headingStructure.h1Count", 0],
+                        },
+                        1,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$content.headingsProperOrder", false] },
+                        { $eq: ["$scores.scores.headingsProperOrder", 0] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                { $cond: ["$analysis.hasContentDuplicates", 1, 0] },
+              ],
+            },
+            image: {
+              $cond: [
+                {
+                  $gt: [
+                    { $ifNull: ["$analysis.images.altMissingCount", 0] },
+                    0,
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+            url: {
+              $add: [
+                {
+                  $cond: [
+                    {
+                      $gt: [
+                        { $strLenCP: { $ifNull: ["$pageUrl", ""] } },
+                        100,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $gt: [
+                        {
+                          $ifNull: [
+                            "$technical.links.internalBrokenLinksCount",
+                            0,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $gt: [
+                        {
+                          $ifNull: [
+                            "$technical.links.externalBrokenLinksCount",
+                            0,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $gt: [
+                        {
+                          $ifNull: ["$technical.links.redirectLinksCount", 0],
+                        },
+                        0,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              ],
+            },
+            technical: {
+              $add: [
+                {
+                  $cond: [
+                    {
+                      $ne: [
+                        "$technical.technicalSeo.canonicalTagExists",
+                        true,
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $ne: ["$technical.performance.mobileResponsive", true],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
         },
       },
-
-      // 👉 Apply error filter (still here, best if precomputed)
-      { $match: errorQuery },
-
-      // 👉 Final projection (skip heavy addFields for speed)
       {
         $project: {
           _id: 1,
           pageUrl: 1,
           seoScore: 1,
           "content.title": 1,
+          errorCounts: 1,
         },
       },
-
       { $sort: sortObj },
-      { $skip: skip },
-      { $limit: parsedLimit },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: parsedLimit }],
+          totalCount: [{ $count: "total" }],
+        },
+      },
     ];
 
-    const webpages = await WebpageCore.aggregate(pipeline);
-
-    // 🔥 Separate count query (faster than $facet)
-    const total = await WebpageCore.aggregate([
-      { $match: baseQuery },
-      {
-        $lookup: {
-          from: "webpage_scores",
-          localField: "_id",
-          foreignField: "webpageCoreId",
-          as: "scores",
-        },
-      },
-      {
-        $addFields: {
-          scores: { $arrayElemAt: ["$scores", 0] },
-        },
-      },
-      { $match: errorQuery },
-      { $count: "total" },
-    ]);
-
-    const totalCount = total[0]?.total || 0;
+    const [result] = await WebpageCore.aggregate(pipeline);
+    const total = result.totalCount[0]?.total || 0;
+    const webpages = result.data;
 
     return res.status(200).json({
       success: true,
@@ -1242,10 +1435,10 @@ const getErrorWebpages = async (req, res) => {
         errorType,
         webpages,
         pagination: {
-          total: totalCount,
+          total,
           page: parsedPage,
           limit: parsedLimit,
-          pages: Math.ceil(totalCount / parsedLimit),
+          pages: Math.ceil(total / parsedLimit),
         },
       },
     });
@@ -1253,7 +1446,7 @@ const getErrorWebpages = async (req, res) => {
     console.error("Error in getErrorWebpages:", error);
     return res.status(500).json({
       success: false,
-      message: "Error fetching webpages",
+      message: "An error occurred while fetching error webpages",
       error: error.message,
     });
   }
