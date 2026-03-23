@@ -274,6 +274,7 @@ const getPaginatedWebpages = async (req, res) => {
 
     const errorCounts = await getErrorCountsSummary(query, total);
 
+
     return res.status(200).json({
       success: true,
       data: {
@@ -297,10 +298,54 @@ const getPaginatedWebpages = async (req, res) => {
   }
 };
 
+const getWebPageError = async (req, res) => {
+  try {
+    const { activityId } = req.params;
+
+    const userId = req.user.id;
+
+
+    const userActivity = await UserActivity.findOne({
+      userId,
+      _id: activityId,
+    }).lean();
+
+    if (!userActivity) {
+      return res.status(404).json({
+        success: false,
+        message: "No crawl activity found for this website",
+      });
+    }
+
+    const query = {
+      userId: new mongoose.Types.ObjectId(userId),
+      userActivityId: new mongoose.Types.ObjectId(activityId),
+    };
+
+    const errorCounts = await getErrorCountsSummary(query, total);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        errorCounts,
+      },
+    });
+
+
+  } catch (err) {
+    console.error("Error in getWebPageError:", err);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching webpage errors",
+      error: err.message,
+    });
+  }
+}
+
 /**
  * Get error counts summary (NEW FUNCTION)
  */
-async function getErrorCountsSummary(baseQuery , totalPages) {
+async function getErrorCountsSummary(baseQuery, totalPages) {
   // const totalPages = await WebpageCore.countDocuments(baseQuery);
 
   const [
@@ -1012,7 +1057,7 @@ const getErrorWebpages = async (req, res) => {
           localField: "_id",
           foreignField: "webpageCoreId",
           pipeline: [
-            {$limit: 1},
+            { $limit: 1 },
             {
               $project: {
                 title: 1,
@@ -1035,7 +1080,7 @@ const getErrorWebpages = async (req, res) => {
           localField: "_id",
           foreignField: "webpageCoreId",
           pipeline: [
-            {$limit: 1},
+            { $limit: 1 },
             {
               $project: {
                 "links.internalBrokenLinksCount": 1,
@@ -1056,7 +1101,7 @@ const getErrorWebpages = async (req, res) => {
           localField: "_id",
           foreignField: "webpageCoreId",
           pipeline: [
-            {$limit: 1},
+            { $limit: 1 },
             {
               $project: {
                 "contentQuality.totalLanguageErrors": 1,
@@ -1099,7 +1144,7 @@ const getErrorWebpages = async (req, res) => {
           from: "webpage_scores",
           localField: "_id",
           foreignField: "webpageCoreId",
-          pipeline: [{$limit: 1}, { $project: { scores: 1 } }],
+          pipeline: [{ $limit: 1 }, { $project: { scores: 1 } }],
           as: "scores",
         },
       },
@@ -1567,7 +1612,7 @@ const getWebpageById = async (req, res) => {
 
       if (include === "technical" || include === "all") {
         populatePromises.push(
-          WebpageTechnical.findOne({ webpageCoreId: id }, {"links.allLinks": 0}).lean()
+          WebpageTechnical.findOne({ webpageCoreId: id }, { "links.allLinks": 0 }).lean()
         );
       } else {
         populatePromises.push(Promise.resolve(null));
@@ -1808,7 +1853,7 @@ const searchWebpages = async (req, res) => {
 /**
  * Bulk operations for webpage management
  */
-const bulkUpdateWebpages = async (req, res) => {
+const bulkUpdateWebpages = async (req, res) => {          
   try {
     const { activityId } = req.params;
     const { webpageIds, updates } = req.body;
@@ -2055,4 +2100,5 @@ module.exports = {
   bulkUpdateWebpages,
   getErrorWebpages,
   deleteWebsiteActivity,
+  getWebPageError,
 };
