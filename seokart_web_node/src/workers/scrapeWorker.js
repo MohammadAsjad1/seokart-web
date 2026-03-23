@@ -1,9 +1,12 @@
 const path = require("path");
+const { pathToFileURL } = require("url");
 const { Worker } = require("bullmq");
 const connection = require("../queue/connection");
+
+const processorPath = path.join(__dirname, "workers-processor", "scrapeProcessor.js");
 const worker = new Worker(
   "scrapeQueue",
-  path.join(__dirname, "workers-processor", "scrapeProcessor.js"), 
+  pathToFileURL(processorPath), 
   {
     connection,
     concurrency: parseInt(process.env.SCRAPER_WORKER_CONCURRENCY, 10) || 1, // creates 1 sandbox process

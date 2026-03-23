@@ -15,7 +15,7 @@ const {
   WebpageTechnical,
   WebpageAnalysis,
 } = require("../models/webpage-models");
-  
+
 class SlowAnalyzerJobV2 {
   constructor(options = {}) {
     this.redis = options.redis ?? null;
@@ -537,11 +537,11 @@ class SlowAnalyzerJobV2 {
               chunk,
               signatureStore,
             ));
-            logger.info("Duplicate processed for chunk", {
-              userId,
-              chunkCount,
-              chunkLength: chunk.length,
-            });
+          logger.info("Duplicate processed for chunk", {
+            userId,
+            chunkCount,
+            chunkLength: chunk.length,
+          });
         } catch (err) {
           logger.error("Pass 2: findDuplicatesWithStore failed", {
             userId,
@@ -612,10 +612,10 @@ class SlowAnalyzerJobV2 {
         const progress = Math.min(
           this.PROGRESS_END,
           this.PROGRESS_START +
-            Math.round(
-              ((this.PROGRESS_END - this.PROGRESS_START) * processed) /
-                totalCount,
-            ),
+          Math.round(
+            ((this.PROGRESS_END - this.PROGRESS_START) * processed) /
+            totalCount,
+          ),
         );
         await this.activityService.updateProgress(userActivityId, { progress });
 
@@ -673,8 +673,8 @@ class SlowAnalyzerJobV2 {
           if (!completeWebpage) return;
           const content =
             completeWebpage.content &&
-            typeof completeWebpage.content === "object" &&
-            completeWebpage.content.content
+              typeof completeWebpage.content === "object" &&
+              completeWebpage.content.content
               ? completeWebpage.content.content
               : typeof completeWebpage.content === "string"
                 ? completeWebpage.content
@@ -1001,8 +1001,8 @@ class SlowAnalyzerJobV2 {
 
             logger.debug(
               `Complete webpage data loaded for ${webpage.pageUrl}. ` +
-                `Has technical: ${!!completeWebpage.technical}, ` +
-                `Has links: ${!!completeWebpage.links}`,
+              `Has technical: ${!!completeWebpage.technical}, ` +
+              `Has links: ${!!completeWebpage.links}`,
             );
 
             const linkResults =
@@ -1016,8 +1016,8 @@ class SlowAnalyzerJobV2 {
             if (hasIssues) {
               logger.warn(
                 `Found ${linkResults.internalBrokenLinks.length} internal broken, ` +
-                  `${linkResults.externalBrokenLinks.length} external broken, ` +
-                  `${linkResults.redirectLinks.length} redirect links on ${webpage.pageUrl}`,
+                `${linkResults.externalBrokenLinks.length} external broken, ` +
+                `${linkResults.redirectLinks.length} redirect links on ${webpage.pageUrl}`,
                 userId,
               );
 
@@ -1328,9 +1328,9 @@ class SlowAnalyzerJobV2 {
   async updateWebpageWithLinks(webpageId, linkResults) {
     logger.debug(
       `Updating links for ${webpageId}: ` +
-        `${linkResults.internalBrokenLinks.length} internal broken, ` +
-        `${linkResults.externalBrokenLinks.length} external broken, ` +
-        `${linkResults.redirectLinks.length} redirects`,
+      `${linkResults.internalBrokenLinks.length} internal broken, ` +
+      `${linkResults.externalBrokenLinks.length} external broken, ` +
+      `${linkResults.redirectLinks.length} redirects`,
     );
 
     try {
@@ -1364,9 +1364,9 @@ class SlowAnalyzerJobV2 {
 
       logger.info(
         `✅ Updated links for ${webpageId}: ` +
-          `${linkResults.internalBrokenLinks.length} internal broken, ` +
-          `${linkResults.externalBrokenLinks.length} external broken, ` +
-          `${linkResults.redirectLinks.length} redirects`,
+        `${linkResults.internalBrokenLinks.length} internal broken, ` +
+        `${linkResults.externalBrokenLinks.length} external broken, ` +
+        `${linkResults.redirectLinks.length} redirects`,
       );
     } catch (error) {
       logger.error(`Error updating webpage ${webpageId} with links:`, error);

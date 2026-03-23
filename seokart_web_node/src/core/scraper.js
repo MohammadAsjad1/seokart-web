@@ -27,9 +27,9 @@ const PROXIES = RAW_PROXIES.map((p) => {
 class SequentialRotation {
   constructor(proxies, requestsPerProxy = 100) {
     this.proxies = proxies;
-    this.agents = proxies.map(proxy => new HttpsProxyAgent(proxy, { 
+    this.agents = proxies.map(proxy => new HttpsProxyAgent(proxy, {
       keepAlive: true,
-      timeout: 30000 
+      timeout: 30000
     }));
     this.requestsPerProxy = requestsPerProxy;
     this.currentIndex = 0;
@@ -51,26 +51,26 @@ class SequentialRotation {
 
   getBestProxy() {
     const available = [];
-  
+
     this.proxyStats.forEach((stats, idx) => {
       if (!this.blockedProxies.has(idx)) {
         const total = stats.successful + stats.failed;
         const successRate = total === 0 ? 1 : stats.successful / total;
-  
+
         available.push({
           idx,
           successRate,
         });
       }
     });
-  
+
     if (available.length === 0) {
       this.blockedProxies.clear();
       return 0;
     }
-  
+
     available.sort((a, b) => b.successRate - a.successRate);
-  
+
     return available[0].idx;
   }
 
@@ -97,9 +97,9 @@ class SequentialRotation {
   //     this.currentIndex = this.getBestProxy();
   //     this.requestCount = 0;
   //   }
-  
+
   //   this.requestCount++;
-  
+
   //   return {
   //     proxy: this.proxies[this.currentIndex],
   //     agent: this.agents[this.currentIndex],
@@ -196,7 +196,7 @@ class WebScraper {
     this.rotationHandler = new SequentialRotation(PROXIES, 100);
     this.shouldStop = false;
     this.MAX_CONSECUTIVE_FAILURES = 25;
-    
+
     console.log("🎯 Sequential rotation initialized - 100 requests per proxy");
   }
 
@@ -251,8 +251,7 @@ class WebScraper {
 
       try {
         console.log(
-          `🌐 Request #${this.stats.requests_made} to ${url} via proxy ${
-            proxyIndex + 1
+          `🌐 Request #${this.stats.requests_made} to ${url} via proxy ${proxyIndex + 1
           }`
         );
 
@@ -296,8 +295,7 @@ class WebScraper {
         this.rotationHandler.recordSuccess(proxyIndex);
 
         console.log(
-          `✅ Success! Response time: ${responseTime}ms via proxy ${
-            proxyIndex + 1
+          `✅ Success! Response time: ${responseTime}ms via proxy ${proxyIndex + 1
           }`
         );
 
@@ -327,10 +325,10 @@ class WebScraper {
         //   err.message.includes("ECONNREFUSED") ||
         //   err.message.includes("ETIMEDOUT");
         const isBlocked =
-                    err.code === "ECONNREFUSED" ||
-                    err.code === "ETIMEDOUT" ||
-                    err.response?.status === 403 ||
-                    err.response?.status === 429;
+          err.code === "ECONNREFUSED" ||
+          err.code === "ETIMEDOUT" ||
+          err.response?.status === 403 ||
+          err.response?.status === 429;
 
         if (isBlocked) {
           // console.error(
@@ -339,10 +337,10 @@ class WebScraper {
           logger.error(`❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`);
           this.rotationHandler.markProxyAsBlocked(proxyIndex);
         } else {
-            // console.error(
-            //   `❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`
-            // );
-            logger.error(`❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`);
+          // console.error(
+          //   `❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`
+          // );
+          logger.error(`❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`);
         }
 
         if (this.stats.consecutive_failures >= this.MAX_CONSECUTIVE_FAILURES) {
@@ -389,16 +387,16 @@ class WebScraper {
       success_rate:
         this.stats.requests_made > 0
           ? (
-              (this.stats.successful_requests / this.stats.requests_made) *
-              100
-            ).toFixed(2) + "%"
+            (this.stats.successful_requests / this.stats.requests_made) *
+            100
+          ).toFixed(2) + "%"
           : "0%",
       retry_rate:
         this.stats.requests_made > 0
           ? (
-              (this.stats.retried_requests / this.stats.requests_made) *
-              100
-            ).toFixed(2) + "%"
+            (this.stats.retried_requests / this.stats.requests_made) *
+            100
+          ).toFixed(2) + "%"
           : "0%",
       rotation_stats: this.getRotationStats(),
       is_stopped: this.shouldStop,

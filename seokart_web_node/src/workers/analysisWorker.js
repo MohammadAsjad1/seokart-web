@@ -1,10 +1,12 @@
 const path = require("path");
+const { pathToFileURL } = require("url");
 const { Worker } = require("bullmq");
 const connection = require("../queue/connection");
 
+const processorPath = path.join(__dirname, "workers-processor", "analysisProcessor.js");
 const worker = new Worker(
   "analysisQueue",
-  path.join(__dirname, "workers-processor", "analysisProcessor.js"),
+  pathToFileURL(processorPath),
   {
     connection,
     concurrency: parseInt(process.env.ANALYSIS_WORKER_CONCURRENCY, 10) || 1,
