@@ -253,6 +253,7 @@ export default function TechnicalTable() {
 
       setConfirmDialogOpen(false);
       setActivityToDelete(null);
+      dispatch(requestActivities() as any);
     } catch (error: any) {
       showToast("Failed to delete activity", "error");
     } finally {

@@ -5,9 +5,12 @@ const logger = require("../config/logger");
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SIMHASH_HAMMING_THRESHOLD = 3; // 64-bit: only ~95%+ match (1 - 3/64). Stricter to avoid false duplicates.
 const SIMHASH_MAX_FEATURES = 128;
-const WORD_SHINGLE_SIZE = 3;
+const WORD_SHINGLE_SIZE = 8;
 const SIMHASH_BITS = 64;
 const JENKINS_SALT_HIGH = "\x01"; // salt for high 32 bits of 64-bit shingle hash
+
+const BANDS = 4;
+const BITS_PER_BAND = 16; 
 
 const STORE_MAX_TITLES = 200000;
 const STORE_MAX_DESCRIPTIONS = 200000;
@@ -93,10 +96,37 @@ class DuplicateProcessorV2 {
     }
     const results = await (multi.exec ? multi.exec() : multi.execAsync?.() ?? Promise.resolve([]));
     if (!Array.isArray(results)) return commands.map(() => null);
+    
     return results.map((res) => {
-      const err = Array.isArray(res) ? res[0] : res;
-      return err ? null : (Array.isArray(res) ? res[1] : res);
+      // ioredis-style: [err, value]
+      if (Array.isArray(res) && res.length === 2) {
+        const [err, val] = res;
+        return err ? null : val;
+      }
+      // node-redis v4: value is returned directly
+      return res;
     });
+  }
+
+  /**
+   * Check if Redis duplicate store exists for this activity (e.g. not expired).
+   * Used by single-URL crawl to decide whether to reuse store or rebuild from DB.
+   * @param {string} userActivityId
+   * @returns {Promise<boolean>}
+   */
+  async isStoreInitialized(userActivityId) {
+    if (!this.redis || !userActivityId) return false;
+    const store = this._emptyStore(userActivityId);
+    const redis = this._redis(store);
+    if (!redis) return false;
+    const key = this._prefix(userActivityId) + "bucket_count";
+    try {
+      const v = await redis.get(key);
+      return v !== null && v !== undefined;
+    } catch (err) {
+      logger.debug("isStoreInitialized check failed", { userActivityId, err: err?.message });
+      return false;
+    }
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
@@ -199,27 +229,17 @@ class DuplicateProcessorV2 {
           contentDuplicates: [],
         };
 
-        // ── Skip pages that declare a canonical elsewhere ──────────────────
         if (page.canonicalUrl && page.canonicalUrl !== page.pageUrl) {
-          duplicateResults.set(idStr, {
-            ...duplicates,
-            skippedReason: "has_canonical",
-          });
+          duplicateResults.set(idStr, { ...duplicates, skippedReason: "has_canonical" });
           continue;
         }
 
-        // ── Title & Description: pipeline reads first ───────────────────────
-        const titleNorm =
-          page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
-        const descNorm =
-          page.metaDescription?.trim().length > 10
-            ? this.normalizeDescription(page.metaDescription)
-            : "";
+        // --- Title & Description Normalization ---
+        const titleNorm = page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
+        const descNorm = page.metaDescription?.trim().length > 10 ? this.normalizeDescription(page.metaDescription) : "";
 
-        let titleExisting = [];
-        let titleCount = 0;
-        let descExisting = [];
-        let descCount = 0;
+        let titleExisting = [], titleCount = 0;
+        let descExisting = [], descCount = 0;
         const pageWriteCmds = [];
 
         if (redis) {
@@ -230,24 +250,12 @@ class DuplicateProcessorV2 {
             { cmd: "hLen", args: [prefix + "descriptions"] },
           ];
           const readResults = await this._execPipeline(store, readCmds);
-          const titleRaw = readResults[0];
-          if (titleRaw != null && titleRaw !== "") {
-            try {
-              titleExisting = JSON.parse(titleRaw);
-            } catch (_) {
-              titleExisting = [];
-            }
-          }
-          titleCount = readResults[1] != null ? Number(readResults[1]) : 0;
-          const descRaw = readResults[2];
-          if (descRaw != null && descRaw !== "") {
-            try {
-              descExisting = JSON.parse(descRaw);
-            } catch (_) {
-              descExisting = [];
-            }
-          }
-          descCount = readResults[3] != null ? Number(readResults[3]) : 0;
+          
+          if (readResults[0]) try { titleExisting = JSON.parse(readResults[0]); } catch (_) {}
+          titleCount = Number(readResults[1] || 0);
+          
+          if (readResults[2]) try { descExisting = JSON.parse(readResults[2]); } catch (_) {}
+          descCount = Number(readResults[3] || 0);
         } else {
           if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
           titleCount = store.titles.size;
@@ -255,54 +263,35 @@ class DuplicateProcessorV2 {
           descCount = store.descriptions.size;
         }
 
-        // ── Title ──────────────────────────────────────────────────────────
+        // --- 1. Title Match ---
         if (titleNorm) {
           const others = titleExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
-            const raw = others.map((e) => ({
-              pageUrl: e.pageUrl,
-              title: e.title,
-              duplicateType: "exact_match",
-              similarity: 1.0,
-            }));
-            duplicates.titleDuplicates = [
-              ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
-            ];
+            duplicates.titleDuplicates = others.map(e => ({ pageUrl: e.pageUrl, title: e.title, duplicateType: "exact_match", similarity: 1.0 }));
             this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
           }
           if (titleCount < STORE_MAX_TITLES) {
-            const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
-            titleExisting.push(newEntry);
+            titleExisting.push({ _id: idStr, pageUrl: page.pageUrl });
             if (!redis) store.titles.set(titleNorm, titleExisting);
           }
         }
 
-        // ── Meta Description ───────────────────────────────────────────────
+        // --- 2. Meta Description Match ---
         if (descNorm) {
           const others = descExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
-            const raw = others.map((e) => ({
-              pageUrl: e.pageUrl,
-              description: e.metaDescription,
-              duplicateType: "exact_match",
-              similarity: 1.0,
-            }));
-            duplicates.descriptionDuplicates = [
-              ...new Map(raw.map((d) => [d.pageUrl, d])).values(),
-            ];
-            this.stats.descriptionDuplicatesFound +=
-              duplicates.descriptionDuplicates.length;
+            duplicates.descriptionDuplicates = others.map(e => ({ pageUrl: e.pageUrl, description: e.metaDescription, duplicateType: "exact_match", similarity: 1.0 }));
+            this.stats.descriptionDuplicatesFound += duplicates.descriptionDuplicates.length;
           }
           if (descCount < STORE_MAX_DESCRIPTIONS) {
-            const newEntry = { _id: page._id.toString(), pageUrl: page.pageUrl };
-            descExisting.push(newEntry);
+            descExisting.push({ _id: idStr, pageUrl: page.pageUrl });
             if (!redis) store.descriptions.set(descNorm, descExisting);
           }
         }
 
-        // ── Content (SimHash): pipeline bucket reads, then process ──────────
+        // --- 3. Content SimHash (4-Band Logic) ---
         let bucketCount = redis ? null : store.totalBucketEntries;
-        let contentBucketMembers = null; // [arr0, arr1, ...] for 8 keys
+        let contentBucketMembers = null;
 
         if (page.content?.trim().length > 100) {
           const cleanText = this.extractCleanTextFromHtml(page.content);
@@ -310,7 +299,7 @@ class DuplicateProcessorV2 {
 
           if (shingles.length > 0) {
             const simhash = this.simhashFromWordShingles(shingles);
-            const bucketKeys = this.getContentSimhashBucketKeys(simhash);
+            const bucketKeys = this.getContentSimhashBucketKeys(simhash); // Now returns 4 keys
 
             if (redis) {
               const contentReadCmds = [
@@ -319,7 +308,8 @@ class DuplicateProcessorV2 {
               ];
               const contentReadResults = await this._execPipeline(store, contentReadCmds);
               bucketCount = parseInt(contentReadResults[0] || "0", 10);
-              contentBucketMembers = contentReadResults.slice(1, 9);
+              // SLICE FIX: Take 1 (count) + 4 (keys) = indices 1 to 4
+              contentBucketMembers = contentReadResults.slice(1, 1 + BANDS);
             }
 
             const seenIds = new Set();
@@ -329,16 +319,10 @@ class DuplicateProcessorV2 {
                 const members = contentBucketMembers[i];
                 if (Array.isArray(members)) {
                   for (const m of members) {
-                    if (m == null || m === "") continue;
                     try {
                       const o = JSON.parse(m);
-                      bucket.push({
-                        ...o,
-                        simhash: BigInt(o.simhash),
-                      });
-                    } catch (_) {
-                      // skip malformed entry
-                    }
+                      bucket.push({ ...o, simhash: BigInt(o.simhash) });
+                    } catch (_) {}
                   }
                 }
               } else if (!redis) {
@@ -346,29 +330,17 @@ class DuplicateProcessorV2 {
               }
 
               for (const entry of bucket) {
-                const entryIdStr = (entry._id || entry._idStr)?.toString?.() ?? entry._id;
+                const entryIdStr = (entry._id || entry._idStr)?.toString();
                 if (entryIdStr === idStr || seenIds.has(entryIdStr)) continue;
                 seenIds.add(entryIdStr);
 
-                const entrySimhash = typeof entry.simhash === "bigint" ? entry.simhash : BigInt(entry.simhash);
-                const dist = this.hammingDistance64(simhash, entrySimhash);
-
+                const dist = this.hammingDistance64(simhash, entry.simhash);
                 if (dist <= SIMHASH_HAMMING_THRESHOLD) {
                   const similarity = parseFloat((1 - dist / SIMHASH_BITS).toFixed(3));
-
-                  let duplicateType;
-                  if (dist === 0) {
-                    duplicateType = "exact_match";
-                  } else if (dist <= 3) {
-                    duplicateType = "near_exact";
-                  } else {
-                    duplicateType = "near_duplicate";
-                  }
-
                   duplicates.contentDuplicates.push({
                     pageUrl: entry.pageUrl,
                     wordCount: entry.wordCount || 0,
-                    duplicateType,
+                    duplicateType: dist === 0 ? "exact_match" : "near_exact",
                     similarity,
                   });
                   this.stats.contentDuplicatesFound += 1;
@@ -376,17 +348,11 @@ class DuplicateProcessorV2 {
               }
             }
 
-            duplicates.contentDuplicates = [
-              ...new Map(
-                duplicates.contentDuplicates.map((d) => [d.pageUrl, d]),
-              ).values(),
-            ];
-
-            if (bucketCount === null) bucketCount = store.totalBucketEntries;
-            if (bucketCount < STORE_MAX_BUCKET_ENTRIES) {
+            // Save new entry if under limit
+            if ((bucketCount || 0) < STORE_MAX_BUCKET_ENTRIES) {
               const entryPayload = JSON.stringify({
                 simhash: simhash.toString(),
-                _id: page._id.toString(),
+                _id: idStr,
                 pageUrl: page.pageUrl,
                 wordCount: page.wordCount || 0,
               });
@@ -395,47 +361,27 @@ class DuplicateProcessorV2 {
                   pageWriteCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
                   pageWriteCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
                 }
-                pageWriteCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", 8] });
-                pageWriteCmds.push({ cmd: "expire", args: [prefix + "bucket_count", REDIS_TTL_SECONDS] });
+                pageWriteCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", BANDS] });
               } else {
-                const entry = {
-                  simhash,
-                  _id: page._id,
-                  pageUrl: page.pageUrl,
-                  wordCount: page.wordCount || 0,
-                };
                 for (const key of bucketKeys) {
-                  let b = store.contentSimhashBuckets.get(key);
-                  if (!b) {
-                    b = [];
-                    store.contentSimhashBuckets.set(key, b);
-                  }
-                  b.push(entry);
-                  store.totalBucketEntries += 1;
+                  let b = store.contentSimhashBuckets.get(key) || [];
+                  b.push({ simhash, _id: idStr, pageUrl: page.pageUrl, wordCount: page.wordCount || 0 });
+                  store.contentSimhashBuckets.set(key, b);
+                  store.totalBucketEntries++;
                 }
               }
-            } else {
-              logger.warn(
-                `SimHash bucket store limit (${STORE_MAX_BUCKET_ENTRIES}) reached — skipping new entry for ${page.pageUrl}`,
-              );
             }
           }
         }
 
-        // ── Pipeline all Redis writes for this page (title, description, content) ─
+        // --- Finalize Redis Writes ---
         if (redis) {
           if (titleNorm && titleCount < STORE_MAX_TITLES) {
-            pageWriteCmds.push({
-              cmd: "hSet",
-              args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)],
-            });
+            pageWriteCmds.push({ cmd: "hSet", args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)] });
             pageWriteCmds.push({ cmd: "expire", args: [prefix + "titles", REDIS_TTL_SECONDS] });
           }
           if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
-            pageWriteCmds.push({
-              cmd: "hSet",
-              args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)],
-            });
+            pageWriteCmds.push({ cmd: "hSet", args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)] });
             pageWriteCmds.push({ cmd: "expire", args: [prefix + "descriptions", REDIS_TTL_SECONDS] });
           }
           if (pageWriteCmds.length) await this._execPipeline(store, pageWriteCmds);
@@ -443,20 +389,10 @@ class DuplicateProcessorV2 {
 
         this.stats.webpagesAnalyzed++;
         duplicateResults.set(idStr, duplicates);
-      } catch (pageError) {
-        logger.error(
-          `Duplicate detection failed for page ${page?.pageUrl}:`,
-          pageError,
-        );
-        duplicateResults.set(page._id.toString(), {
-          titleDuplicates: [],
-          descriptionDuplicates: [],
-          contentDuplicates: [],
-          error: true,
-        });
+      } catch (err) {
+        logger.error(`Error processing ${page?.pageUrl}:`, err);
       }
     }
-
     return { duplicateResults, updatedStore: store };
   }
 
@@ -577,10 +513,10 @@ class DuplicateProcessorV2 {
       return (BigInt(high) << 32n) | BigInt(low);
     });
     const unique = [...new Set(hashes)];
-    const selected =
-      unique.length > SIMHASH_MAX_FEATURES
-        ? unique.slice(0, SIMHASH_MAX_FEATURES)
-        : unique;
+    const selected = unique;
+      // unique.length > SIMHASH_MAX_FEATURES
+      //   ? unique.slice(0, SIMHASH_MAX_FEATURES)
+      //   : unique;
 
     let simhash = 0n;
     for (let pos = 0; pos < SIMHASH_BITS; pos++) {
@@ -594,22 +530,23 @@ class DuplicateProcessorV2 {
     return simhash;
   }
 
-  /**
-   * 8 bands of 8 bits each for 64-bit SimHash LSH bucketing.
-   * Keys are bandIndex * 256 + value so bands do not collide.
-   * @param {bigint} hash64
-   * @returns {number[]} 8 bucket keys
-   */
+  // 4 bands of 16 bits each for 64-bit SimHash LSH bucketing.
+  // Keys are bandIndex * 65536 + value so bands do not collide.
+  // @param {bigint} hash64
+  // @returns {number[]} 4 bucket keys
   getContentSimhashBucketKeys(hash64) {
     const keys = [];
-    for (let band = 0; band < 8; band++) {
-      const shift = BigInt(band * 8);
-      const value = Number((hash64 >> shift) & 0xffn);
-      keys.push(band * 256 + value);
+    for (let band = 0; band < BANDS; band++) {
+      const shift = BigInt(band * BITS_PER_BAND);
+      // 0xffff is the mask for 16 bits (65535 in decimal)
+      const value = Number((hash64 >> shift) & 0xffffn);
+      
+      // Offset each band so keys from Band 0 don't collide with Band 1
+      // Band 0: 0-65535, Band 1: 65536-131071, etc.
+      keys.push(band * 65536 + value);
     }
     return keys;
   }
-
   /**
    * Hamming distance between two 64-bit SimHashes (BigInt).
    * @param {bigint} a
@@ -685,7 +622,12 @@ class DuplicateProcessorV2 {
       cursor = typeof next === "string" ? next : String(next);
       keys.push(...(Array.isArray(k) ? k : [k]));
     } while (cursor !== "0");
-    if (keys.length) await r.del(...keys);
+    if (keys.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < keys.length; i += CHUNK) {
+        await r.unlink(...keys.slice(i, i + CHUNK));
+      }
+    }
   }
 
   /**
@@ -783,7 +725,7 @@ class DuplicateProcessorV2 {
                 writeCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
                 writeCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
               }
-              writeCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", 8] });
+              writeCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", BANDS] });
               writeCmds.push({ cmd: "expire", args: [prefix + "bucket_count", REDIS_TTL_SECONDS] });
               await this._execPipeline(store, writeCmds);
             } else {

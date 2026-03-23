@@ -9,6 +9,7 @@ import {
   resetSocket,
 } from "../slices/socketSlice";
 import { updateActivitiesFromSocket } from "../slices/scraperSlice";
+import { showToast } from "@/lib/toast";
 
 let socket: Socket | null = null;
 
@@ -72,6 +73,11 @@ export const initializeSocket = (): any => {
     });
 
     socket.on("crawl_complete", (data: any) => {
+      dispatch(requestActivities());
+    });
+
+    socket.on("crawl_error", (data: any) => {
+      showToast(data.message, "error");
       dispatch(requestActivities());
     });
 

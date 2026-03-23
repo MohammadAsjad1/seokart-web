@@ -45,7 +45,7 @@ class ScraperService {
       );
 
       // ADD - START STALLED JOB MONITOR
-      crashRecoveryService.startStalledJobMonitor();
+      // crashRecoveryService.startStalledJobMonitor();
 
       this.startPeriodicTasks();
       this.setupShutdownHandlers();

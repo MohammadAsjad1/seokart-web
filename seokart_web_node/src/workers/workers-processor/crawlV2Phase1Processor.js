@@ -70,9 +70,24 @@ module.exports = async function (job) {
       throw new Error(validation.message || "Website validation failed");
     }
     if (!validation.sitemapUrls || validation.sitemapUrls.length === 0) {
-      throw new Error(
-        "No sitemaps found. Please provide sitemap URLs manually.",
-      );
+      await UserActivity.findByIdAndUpdate(activityId, {
+        status: "failed",
+        endTime: new Date(),
+        errorMessages: ["No sitemaps found"],
+        isSitemapCrawling: 0,
+        isWebpageCrawling: 0,
+        lastUpdated: new Date(),
+      });
+      emitToUser(userId, "crawl_error", {
+        websiteUrl: cleanUrl,
+        message: "No sitemaps found",
+        activityId,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        success: false,
+        message: "No sitemaps found",
+      };
     }
     finalSitemapUrls = validation.sitemapUrls;
   }
@@ -89,7 +104,24 @@ module.exports = async function (job) {
 
   const allUrls = sitemapResult.extractedUrls;
   if (!allUrls || allUrls.length === 0) {
-    throw new Error("No URLs found in sitemaps");
+    await UserActivity.findByIdAndUpdate(activityId, {
+      status: "failed",
+      endTime: new Date(),
+      errorMessages: ["No URLs found in sitemaps"],
+      isSitemapCrawling: 0,
+      isWebpageCrawling: 0,
+      lastUpdated: new Date(),
+    });
+    emitToUser(userId, "crawl_error", {
+      websiteUrl: cleanUrl,
+      message: "No URLs found in sitemaps",
+      activityId,
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      success: false,
+      message: "No URLs found in sitemaps",
+    };
   }
 
   await UserActivity.findByIdAndUpdate(activityId, {

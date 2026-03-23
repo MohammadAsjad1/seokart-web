@@ -80,27 +80,36 @@ interface WebpageErrorCounts {
 }
 
 const calculateWebpageErrors = (webpage: any): WebpageErrorCounts => {
+  if (webpage?.errorCounts) {
+    return {
+      meta: webpage.errorCounts.meta ?? 0,
+      content: webpage.errorCounts.content ?? 0,
+      image: webpage.errorCounts.image ?? 0,
+      url: webpage.errorCounts.url ?? 0,
+      technical: webpage.errorCounts.technical ?? 0,
+    };
+  }
+
   let metaErrors = 0;
   let contentErrors = 0;
   let imageErrors = 0;
   let urlErrors = 0;
   let technicalErrors = 0;
 
-  if (!webpage.content?.title) metaErrors++;
+  if (!webpage.content?.title || webpage.content.title.trim() === "") metaErrors++;
 
-  if (
-    webpage.content?.titleLength &&
-    (webpage.content.titleLength < 40 || webpage.content.titleLength > 60)
-  ) {
+  const length = webpage.content?.titleLength ?? 0;
+
+  if (length < 40 || length > 60) {
     metaErrors++;
   }
 
-  if (!webpage.content?.metaDescription) metaErrors++;
+  if (!webpage.content?.metaDescription || webpage.content.metaDescription.trim() === "") metaErrors++;
 
+  const metaDescriptionLength = webpage.content?.metaDescriptionLength ?? 0;
   if (
-    webpage.content?.metaDescriptionLength &&
-    (webpage.content.metaDescriptionLength < 120 ||
-      webpage.content.metaDescriptionLength > 160)
+    metaDescriptionLength < 120 ||
+    metaDescriptionLength > 160
   ) {
     metaErrors++;
   }
@@ -109,7 +118,7 @@ const calculateWebpageErrors = (webpage: any): WebpageErrorCounts => {
     webpage.analysis?.duplicates?.titleDuplicates &&
     webpage.analysis.duplicates.titleDuplicates.length > 0
   ) {
-    metaErrors += 2;
+    metaErrors ++;
   }
 
   if (

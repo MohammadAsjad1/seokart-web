@@ -7,16 +7,16 @@ const RateLimiter = require("./rate-limiter");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const RAW_PROXIES = [
-  "31.59.20.176:6754:aeqauquw:xteoegagpap2",
-  "23.95.150.145:6114:aeqauquw:xteoegagpap2",
-  "198.23.239.134:6540:aeqauquw:xteoegagpap2",
-  "45.38.107.97:6014:aeqauquw:xteoegagpap2",
-  "107.172.163.27:6543:aeqauquw:xteoegagpap2",
-  "64.137.96.74:6641:aeqauquw:xteoegagpap2",
-  "198.105.121.200:6462:aeqauquw:xteoegagpap2",
-  "216.10.27.159:6837:aeqauquw:xteoegagpap2",
-  "142.111.67.146:5611:aeqauquw:xteoegagpap2",
-  "191.96.254.138:6185:aeqauquw:xteoegagpap2",
+  "31.59.20.176:6754:atcwwnik:6i98ov4o1c5n",
+  "23.95.150.145:6114:atcwwnik:6i98ov4o1c5n",
+  "198.23.239.134:6540:atcwwnik:6i98ov4o1c5n",
+  "45.38.107.97:6014:atcwwnik:6i98ov4o1c5n",
+  "107.172.163.27:6543:atcwwnik:6i98ov4o1c5n",
+  "198.105.121.200:6462:atcwwnik:6i98ov4o1c5n",
+  "64.137.96.74:6641:atcwwnik:6i98ov4o1c5n",
+  "216.10.27.159:6837:atcwwnik:6i98ov4o1c5n",
+  "142.111.67.146:5611:atcwwnik:6i98ov4o1c5n",
+  "191.96.254.138:6185:atcwwnik:6i98ov4o1c5n",
 ];
 
 const PROXIES = RAW_PROXIES.map((p) => {
@@ -467,36 +467,63 @@ class WebScraper {
       .trim();
   }
 
+  // extractMainContent($) {
+  //   let content = "";
+  //   const contentSelectors = [
+  //     "main",
+  //     "article",
+  //     '[role="main"]',
+  //     ".main-content",
+  //     ".content",
+  //     "#content",
+  //     ".post-content",
+  //     ".entry-content",
+  //     ".article-content",
+  //   ];
+
+  //   for (const selector of contentSelectors) {
+  //     const element = $(selector).first();
+  //     if (element.length) {
+  //       const text = element.text().trim();
+  //       if (text.length > content.length) {
+  //         content = text;
+  //       }
+  //     }
+  //   }
+
+  //   if (!content || content.length < 100) {
+  //     $("nav, header, footer, aside, .sidebar, .menu, .navigation").remove();
+  //     content = $("body").text().trim();
+  //   }
+
+  //   return content;
+  // }
   extractMainContent($) {
-    let content = "";
-    const contentSelectors = [
-      "main",
-      "article",
-      '[role="main"]',
-      ".main-content",
-      ".content",
-      "#content",
-      ".post-content",
-      ".entry-content",
-      ".article-content",
-    ];
-
-    for (const selector of contentSelectors) {
-      const element = $(selector).first();
-      if (element.length) {
-        const text = element.text().trim();
-        if (text.length > content.length) {
-          content = text;
-        }
+    // 1. Nuclear option for non-content tags
+    $("script, style, noscript, iframe, footer, header, nav, aside, .ads, .social").remove();
+  
+    // 2. Heuristic: Remove elements with high link density (Common in sidebars/menus)
+    $("div, ul, section").each((i, el) => {
+      const $el = $(el);
+      const textLength = $el.text().trim().length;
+      const linkLength = $el.find("a").text().trim().length;
+      
+      // If more than 50% of the text in a block is inside <a> tags, it's likely a menu
+      if (textLength > 0 && (linkLength / textLength) > 0.5) {
+        $el.remove();
       }
-    }
-
-    if (!content || content.length < 100) {
-      $("nav, header, footer, aside, .sidebar, .menu, .navigation").remove();
-      content = $("body").text().trim();
-    }
-
-    return content;
+    });
+  
+    // 3. Grab the largest remaining text block
+    let bestContent = "";
+    $("main, article, .content, #content, body").each((i, el) => {
+      const txt = $(el).text().trim();
+      if (txt.length > bestContent.length) {
+        bestContent = txt;
+      }
+    });
+  
+    return bestContent.replace(/\s+/g, " ");
   }
 
   extractHeadings($) {
@@ -621,9 +648,10 @@ class WebScraper {
         hasMediaQueries:
           $("style")
             .toArray()
-            .some((el) => $(el).html()?.includes("@media")) ||
-          $('link[rel="stylesheet"][href]').length > 0,
-
+            .some((el) => $(el).html()?.includes("@media")),
+          //   ||
+          // $('link[rel="stylesheet"][href]').length > 0,
+      
         hasResponsiveUnits:
           $("style")
             .toArray()

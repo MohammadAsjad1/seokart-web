@@ -1,9 +1,12 @@
+const dotenv = require("dotenv");
 const path = require("path");
 const { pathToFileURL } = require("url");
 const { Worker } = require("bullmq");
 const connection = require("../queue/connection");
 const crawlV2Config = require("../config/crawl-v2");
 const logger = require("../config/logger");
+
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const processorPath = path.join(__dirname, "workers-processor", "crawlV2Phase1Processor.js");
 const worker = new Worker(

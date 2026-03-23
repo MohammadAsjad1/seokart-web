@@ -356,7 +356,7 @@ class LinkProcessor {
     });
     try {
       await this._redisSet(key, payload, "EX", ttl);
-      logger.info("Link cache set successfully");
+      // logger.info("Link cache set successfully");
     } catch (err) {
       logger.error("❌ Link cache set failed (non-fatal)", { err: err?.message });
     }
@@ -379,7 +379,7 @@ class LinkProcessor {
       const activityId = options.activityId ?? null;
       const cached = await this._getLinkCache(url, activityId);
       if (cached) {
-        logger.info("Link cache hit for URL:", url);
+        // logger.info("Link cache hit for URL:", url);
         return cached;
       }
     } catch {
