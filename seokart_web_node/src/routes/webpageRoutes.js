@@ -6,8 +6,8 @@ const {
   getWebpageById,
   getWebpageStats,
   getErrorWebpages,
-  deleteWebsiteActivity,  
-  getWebPageError
+  deleteWebsiteActivity, 
+  getWebPageErrorCounts
 } = require('../controllers/webpageController');
 const { auth } = require('../middleware/authMiddleware');
 
@@ -19,7 +19,7 @@ router.delete('/activity/:activityId', deleteWebsiteActivity);
 router.get('/pages/:activityId', getPaginatedWebpages);
 
 // Fetch Page Errors
-router.get('/errors/:activityId', getWebPageError);
+router.get('/errors/:activityId', getWebPageErrorCounts);
 
 // Get webpage statistics for a website
 router.get('/:websiteUrl/stats', getWebpageStats);

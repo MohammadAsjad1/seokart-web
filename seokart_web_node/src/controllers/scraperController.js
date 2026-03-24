@@ -736,7 +736,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       });
     }
 
-    const userPlan = await UserPlan.findOne({ userId }).select("webCrawler")
+    const userPlan = await UserPlan.findOne({ userId });
     if (!userPlan) {
       return res.status(404).json({
         success: false,
@@ -823,11 +823,19 @@ const handleSingleUrlCrawl = async (req, res) => {
     //   duplicates: {},
     //   brokenLinks: [],
     // });
+    const links = scrapedData.links?.allLinks || [];
+    const uniqueLinks = new Map();
+    links.forEach(link => {
+      const url = link.url || link.href;
+      if (url) {
+        uniqueLinks.set(url, link);
+      }
+    });
 
     // Process links and get broken links
     console.log("Processing links...");
     console.time("validatePageLinks");
-    const linkResults = await linkProcessor.validatePageLinks(webpageCore);
+    const linkResults = await linkProcessor.validatePageLinks({pageUrl, websiteUrl, links: {allLinks: Array.from(uniqueLinks.values())}});
     console.timeEnd("validatePageLinks");
 
 
@@ -848,6 +856,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       wordCount: scrapedData.wordCount,
     };
 
+
     // Duplicate detection: use Redis store when warm; otherwise rebuild once from DB (100k-safe).
     const activityId = userActivity._id.toString();
     const signatureStore = duplicateProcessor._emptyStore(activityId);
@@ -856,10 +865,12 @@ const handleSingleUrlCrawl = async (req, res) => {
       descriptionDuplicates: [],
       contentDuplicates: [],
     };
-
+    
+    logger.info("Starting duplicate detection for single URL crawl --> ", {websiteUrl, pageUrl});
     const hasStore = await duplicateProcessor.isStoreInitialized(activityId);
     if (!hasStore) {
       // Store expired or never built — one-time chunked rebuild so duplicates are accurate.
+      logger.info("Building duplicate store...");
       const slowAnalyzer = new SlowAnalyzerJobV2({ redis: getDuplicateRedis() });
       const chunkSize = 2000;
       let lastId = null;
@@ -874,6 +885,7 @@ const handleSingleUrlCrawl = async (req, res) => {
           break;
         }
       }
+      logger.info("Duplicate store built successfully");
     }
 
     try {
@@ -882,6 +894,7 @@ const handleSingleUrlCrawl = async (req, res) => {
           [currentWebpageData],
           signatureStore,
         );
+      logger.info("Duplicate results found");
       currentPageDuplicates = duplicateResults.get(webpageCore._id.toString()) ?? currentPageDuplicates;
     } catch (err) {
       logger.error("Error finding duplicates for current page", err);
@@ -1108,6 +1121,7 @@ const handleSingleUrlCrawl = async (req, res) => {
         await userPlan.incrementUsage("webCrawler", "pages", 1);
       }
     } catch (planErr) {
+      console.error("Failed to update user plan usage for single URL crawl", planErr, userId);
       logger.error("Failed to update user plan usage for single URL crawl", planErr, userId);
     }
 

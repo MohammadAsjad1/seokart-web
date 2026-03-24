@@ -92,6 +92,8 @@ interface ScraperState {
   webpageDetailData: Webpage | null;
   webpageDetailLoading: boolean;
   webpageDetailError: string | null;
+  errorCounts: any | null;
+  errorCountsLoading: boolean;
 }
 
 const initialState: ScraperState = {
@@ -111,6 +113,8 @@ const initialState: ScraperState = {
   webpageDetailData: null,
   webpageDetailLoading: false,
   webpageDetailError: null,
+  errorCounts: null,
+  errorCountsLoading: false,
 };
 
 export const startSitemapCrawl = createAsyncThunk(
@@ -208,7 +212,7 @@ export const fetchWebpages = createAsyncThunk(
       if (params.search) queryParams.append("search", params.search);
 
       const response = await axiosInstance.get(
-        `/webpage/${params.activityId}?${queryParams.toString()}`
+        `/webpage/pages/${params.activityId}?${queryParams.toString()}`
       );
 
       return response.data;
@@ -218,6 +222,18 @@ export const fetchWebpages = createAsyncThunk(
           error.message ||
           "Failed to fetch webpages"
       );
+    }
+  }
+);
+
+export const getErrorCounts = createAsyncThunk(
+  "scraper/getErrorCounts",
+  async (activityId: string, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get(`/webpage/errors/${activityId}`);
+      return response.data.data.errorCounts;
+    } catch (error: any) {
+      return rejectWithValue(error.response?.data?.message || error.message || "Failed to fetch error counts");
     }
   }
 );
@@ -506,6 +522,18 @@ const scraperSlice = createSlice({
       .addCase(fetchWebpageById.rejected, (state, action) => {
         state.webpageDetailLoading = false;
         state.webpageDetailError = action.payload as string;
+      })
+      .addCase(getErrorCounts.pending, (state) => {
+        state.errorCounts = null;
+        state.errorCountsLoading = true;
+      })
+      .addCase(getErrorCounts.fulfilled, (state, action) => {
+        state.errorCounts = action.payload;
+        state.errorCountsLoading = false;
+      })
+      .addCase(getErrorCounts.rejected, (state, action) => {
+        state.errorCounts = null;
+        state.errorCountsLoading = false;
       });
   },
 });

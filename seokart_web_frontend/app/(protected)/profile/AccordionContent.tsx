@@ -34,6 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { showToast } from "@/lib/toast";
+import { getErrorCounts } from "@/store/slices/scraperSlice";
 
 interface AccordionContentProps {
   activityId: string;
@@ -124,18 +125,35 @@ export default function AccordionContent({
 
     dispatch(fetchWebpages(params))
       .unwrap()
+      // .then((response) => {
+      //   setFetchError(null);
+      //   if (response?.data?.errorCounts) {
+      //     setErrorCounts(response.data.errorCounts);
+      //   }
+      // })
+      // .catch((error) => {
+      //   if (error && typeof error === 'string' && !error.includes("No webpages found")) {
+      //     setFetchError("Failed to load webpages. Please try again.");
+      //   }
+      // });
+  }, [activityId, limit, sortValue, searchTerm, dispatch]);
+
+  const fetchErrorCounts = useCallback(() => {
+    dispatch(getErrorCounts(activityId))
+      .unwrap()
       .then((response) => {
-        setFetchError(null);
-        if (response?.data?.errorCounts) {
-          setErrorCounts(response.data.errorCounts);
-        }
+        setErrorCounts(response);
       })
       .catch((error) => {
-        if (error && typeof error === 'string' && !error.includes("No webpages found")) {
-          setFetchError("Failed to load webpages. Please try again.");
-        }
+        setFetchError("Failed to load error counts. Please try again.");
       });
-  }, [activityId, limit, sortValue, searchTerm, dispatch]);
+  }, [activityId, dispatch]);
+
+  useEffect(() => {
+    if (activityId) {
+      fetchErrorCounts();
+    }
+  }, [activityId, fetchErrorCounts]);
 
   const handleScrapeWebpage = useCallback(
     async (e: React.MouseEvent, webpage: any) => {

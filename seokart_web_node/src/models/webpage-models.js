@@ -385,6 +385,7 @@ const SitemapSchema = new mongoose.Schema(
 );
 
 // Create indexes for better performance
+WebpageCoreSchema.index({ userId: 1, userActivityId: 1 , isProcessed: 1});
 WebpageCoreSchema.index({ userId: 1, websiteUrl: 1 });
 WebpageCoreSchema.index({ userActivityId: 1 });
 WebpageCoreSchema.index({ userId: 1, pageUrl: 1 });
