@@ -79,7 +79,8 @@ class ScoreCalculator {
       noExternalBrokenLinks: this.checkNoExternalBrokenLinks(webpageData),
 
       // Point 17: Website should be fully mobile responsive (5%)
-      mobileResponsive: this.checkMobileResponsive(webpageData),
+      // mobileResponsive: this.checkMobileResponsive(webpageData),
+      // mobileResponsive: 5,
 
       // Point 18: Images should have alt text (5%)
       imagesHaveAltText: this.checkImagesHaveAltText(webpageData),
@@ -92,10 +93,14 @@ class ScoreCalculator {
     };
 
     // Calculate total score (sum of all points)
-    const totalScore = Object.values(scores).reduce(
-      (sum, score) => sum + score,
-      0
-    );
+    const scoresArray = Object.values(scores);
+    const totalItems = scoresArray.length;
+    
+    // Logic: Sum of scores / (Count of items * Max points per item) * 100
+    const rawSum = scoresArray.reduce((sum, val) => sum + val, 0);
+    const maxPossible = totalItems * 5; 
+    
+    const totalScore = maxPossible > 0 ? Math.round((rawSum / maxPossible) * 100) : 0;
 
     // Calculate grade
     const grade = this.calculateGrade(totalScore);

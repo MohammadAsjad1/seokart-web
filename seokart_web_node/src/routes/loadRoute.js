@@ -1,6 +1,7 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const Channel = require("../models/channel-model");
 
 const router = express.Router();
 
@@ -26,6 +27,12 @@ router.get("/", async (req, res) => {
 
     user.lastLogin = new Date();
     await user.save();
+
+    const primaryChannel = await Channel.findOne({
+      store_hash: user.store_hash,
+      is_primary: true,
+      isDeleted: false,
+    }).select("store_hash channel_id name storefront_url").lean();
 
     const token = jwt.sign(
       {
@@ -60,6 +67,7 @@ router.get("/", async (req, res) => {
         user: { ...user.toObject(), needsSetup: user.needsSetup() },
         token,
         sessionExpiresAt,
+        channels: [primaryChannel],
       },
     });
   } catch(err) {

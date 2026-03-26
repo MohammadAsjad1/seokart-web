@@ -434,7 +434,7 @@ function getPlanLimits(plan) {
       keywords: 10,
       competitors: 3,
       updateFrequency: 'weekly',
-      aiTracking: false,
+      aiTracking: true,
       historicalWeeks: 4
     },
     basic: {

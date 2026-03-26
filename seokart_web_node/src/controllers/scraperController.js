@@ -922,7 +922,7 @@ const handleSingleUrlCrawl = async (req, res) => {
         statusCode: scrapedData.statusCode || 200,
         lastCrawled: new Date(),
         scrapedAt: new Date(),
-        seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
+        seoScore: finalScoreResult.totalScore,
         seoGrade: finalScoreResult.grade,
         responseTime: scrapedData.responseTime || 0,
         hasErrors: false,
@@ -997,7 +997,7 @@ const handleSingleUrlCrawl = async (req, res) => {
     // Update or create WebpageScores
     const scoresData = {
       webpageCoreId: webpageCore._id,
-      seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
+      seoScore: finalScoreResult.totalScore,
       seoGrade: finalScoreResult.grade,
       scores: finalScoreResult.scores,
       lastCalculated: new Date(),
@@ -1131,7 +1131,7 @@ const handleSingleUrlCrawl = async (req, res) => {
       message: "Webpage successfully crawled and updated",
       data: {
         pageUrl,
-        seoScore: Math.round(finalScoreResult.totalScore * 10) / 10,
+        seoScore: finalScoreResult.totalScore,
         seoGrade: finalScoreResult.grade,
         // lastCrawled: updatedCore.lastCrawled
         issues: {

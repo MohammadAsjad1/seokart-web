@@ -969,20 +969,20 @@ async function getTechnicalIssuesCounts(baseQuery) {
             ],
           },
         },
-        notMobileResponsive: {
-          $sum: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: ["$technical.performance.mobileResponsive", false] },
-                  { $eq: ["$scores.scores.mobileResponsive", 0] },
-                ],
-              },
-              1,
-              0,
-            ],
-          },
-        },
+        // notMobileResponsive: {
+        //   $sum: {
+        //     $cond: [
+        //       {
+        //         $or: [
+        //           { $eq: ["$technical.performance.mobileResponsive", false] },
+        //           { $eq: ["$scores.scores.mobileResponsive", 0] },
+        //         ],
+        //       },
+        //       1,
+        //       0,
+        //     ],
+        //   },
+        // },
       },
     },
   ];
@@ -1003,12 +1003,12 @@ async function getTechnicalIssuesCounts(baseQuery) {
       count: data.canonicalTagMissing || 0,
       type: "technical",
     },
-    {
-      id: "not_mobile_responsive",
-      title: "Webpage is Mobile Responsive",
-      count: data.notMobileResponsive || 0,
-      type: "technical",
-    },
+    // {
+    //   id: "not_mobile_responsive",
+    //   title: "Webpage is Mobile Responsive",
+    //   count: data.notMobileResponsive || 0,
+    //   type: "technical",
+    // },
   ];
 }
 

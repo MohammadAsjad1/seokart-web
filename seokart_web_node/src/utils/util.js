@@ -50,7 +50,7 @@ exports.ERROR_QUERIES = {
   ),
   spelling_errors: scoreOrField(
     "noGrammarSpellingErrors",
-    "analysis.contentQuality.spellingErrorsCount",
+    "analysis.contentQuality.totalLanguageErrors",
     0,
     "$gt",
   ),
@@ -108,6 +108,7 @@ const LOOKUPS = [
       metaDescriptionLength: 1,
       wordCount: 1,
       "headingStructure.h1Count": 1,
+      "headingStructure.h2Count": 1,
       headingsProperOrder: 1,
     },
   },
@@ -118,6 +119,7 @@ const LOOKUPS = [
       "links.internalBrokenLinksCount": 1,
       "links.externalBrokenLinksCount": 1,
       "links.redirectLinksCount": 1,
+      "links.httpLinksCount": 1,
       "technicalSeo.canonicalTagExists": 1,
       "performance.mobileResponsive": 1,
     },
@@ -178,105 +180,68 @@ const countIfOutOfRange = (fieldExpr, min, max) =>
 exports.ERROR_COUNT_FIELDS = {
   meta: {
     $add: [
-      // Missing title
+      // Keep meta error counting aligned with how scores are computed/queried.
+      // Each term contributes 1 if that specific meta check failed.
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.titleNotMissing", 0] }, 0] }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.titleRightLength", 0] }, 0] }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.metaDescNotMissing", 0] }, 0] }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.metaDescRightLength", 0] }, 0] }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.noMultipleTitles", 0] }, 0] }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.titleNotDuplicated", 0] }, 0] }),
       countIf({
-        $eq: [
-          {
-            $strLenCP: {
-              $trim: { input: { $ifNull: ["$content.title", ""] } },
-            },
-          },
-          0,
-        ],
+        $eq: [{ $ifNull: ["$scores.scores.metaDescNotDuplicated", 0] }, 0],
       }),
-      // Title length not in [40, 60]
-      countIfOutOfRange({ $ifNull: ["$content.titleLength", 0] }, 40, 60),
-      // Missing meta description
-      countIf({
-        $eq: [
-          {
-            $strLenCP: {
-              $trim: { input: { $ifNull: ["$content.metaDescription", ""] } },
-            },
-          },
-          0,
-        ],
-      }),
-      // Meta description length not in [120, 160]
-      countIfOutOfRange(
-        { $ifNull: ["$content.metaDescriptionLength", 0] },
-        120,
-        160,
-      ),
-      // Duplicate titles
-      countIf("$analysis.hasTitleDuplicates"),
-      // Duplicate descriptions
-      countIf("$analysis.hasDescDuplicates"),
     ],
   },
 
   content: {
     $add: [
-      // Word count > 0 but < 200 (too short)
+      // Align with scoring keys (prevents “meta counts leaking into content view”).
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.contentNotTooShort", 0] }, 0] }),
       countIf({
-        $and: [
-          { $gt: [{ $ifNull: ["$content.wordCount", 0] }, 0] },
-          { $lt: [{ $ifNull: ["$content.wordCount", 0] }, 200] },
-        ],
+        $eq: [{ $ifNull: ["$scores.scores.noGrammarSpellingErrors", 0] }, 0],
       }),
-      // Has language errors
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.oneH1Only", 0] }, 0] }),
       countIf({
-        $gt: [
-          { $ifNull: ["$analysis.contentQuality.totalLanguageErrors", 0] },
-          0,
-        ],
+        $eq: [{ $ifNull: ["$scores.scores.headingsProperOrder", 0] }, 0],
       }),
-      // H1 count is not exactly 1
       countIf({
-        $ne: [{ $ifNull: ["$content.headingStructure.h1Count", 0] }, 1],
+        $eq: [{ $ifNull: ["$scores.scores.contentNotDuplicated", 0] }, 0],
       }),
-      // Headings in wrong order
-      countIf({
-        $or: [
-          { $eq: ["$content.headingsProperOrder", false] },
-          { $eq: ["$scores.scores.headingsProperOrder", 0] },
-        ],
-      }),
-      // Duplicate content
-      countIf("$analysis.hasContentDuplicates"),
     ],
   },
 
   // Images missing alt text
   image: countIf({
-    $gt: [{ $ifNull: ["$analysis.images.altMissingCount", 0] }, 0],
+    $eq: [{ $ifNull: ["$scores.scores.imagesHaveAltText", 0] }, 0],
   }),
 
   url: {
     $add: [
-      // URL too long (> 100 chars)
-      countIf({ $gt: [{ $strLenCP: { $ifNull: ["$pageUrl", ""] } }, 100] }),
-      // Internal broken links
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.urlNotTooLong", 0] }, 0] }),
       countIf({
-        $gt: [{ $ifNull: ["$technical.links.internalBrokenLinksCount", 0] }, 0],
+        $eq: [{ $ifNull: ["$scores.scores.noInternalBrokenLinks", 0] }, 0],
       }),
-      // External broken links
       countIf({
-        $gt: [{ $ifNull: ["$technical.links.externalBrokenLinksCount", 0] }, 0],
+        $eq: [{ $ifNull: ["$scores.scores.noExternalBrokenLinks", 0] }, 0],
       }),
-      // Redirect links
       countIf({
-        $gt: [{ $ifNull: ["$technical.links.redirectLinksCount", 0] }, 0],
+        $eq: [{ $ifNull: ["$scores.scores.noRedirectLinks", 0] }, 0],
       }),
+      countIf({ $eq: [{ $ifNull: ["$scores.scores.noHttpLinks", 0] }, 0] }),
     ],
   },
 
   technical: {
     $add: [
-      // No canonical tag
-      countIf({ $ne: ["$technical.technicalSeo.canonicalTagExists", true] }),
-      // Not mobile responsive
-      countIf({ $ne: ["$technical.performance.mobileResponsive", true] }),
+      // Canonical tag is scored; mobile responsive may be unscored (depends on latest scoring toggles)
+      countIf({
+        $eq: [{ $ifNull: ["$scores.scores.canonicalTagExists", 0] }, 0],
+      }),
+      // MObile responsive is removed from the scoring system
+      // countIf({
+      //   $ne: ["$technical.performance.mobileResponsive", true],
+      // }),
     ],
   },
 };

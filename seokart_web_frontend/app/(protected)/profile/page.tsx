@@ -7,7 +7,9 @@ import { showToast } from "@/lib/toast";
 import TechnicalTable from "./TechnicalTable";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { startSitemapCrawl } from "@/store/slices/scraperSlice";
-import { Loader2 } from "lucide-react";
+import { SquareArrowOutUpRight } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { setSelectedChannel } from "@/store/slices/channelSlice";
 
 export default function Technical() {
   const [websiteUrl, setWebsiteUrl] = useState("");
@@ -15,6 +17,7 @@ export default function Technical() {
   const dispatch = useAppDispatch();
   const { loading } = useAppSelector((state) => state.scraper);
   const { userPlan } = useAppSelector((state) => state.userPlan);
+  const { channels,selectedChannel } = useAppSelector((state) => state.channel);
 
   const handleStartCrawl = useCallback(async () => {
     if (!websiteUrl.trim()) {
@@ -50,14 +53,44 @@ export default function Technical() {
     [handleStartCrawl, loading, websiteUrl]
   );
 
+  const handleChannelChange = useCallback((value: string) => {
+    const channel = channels?.find((channel) => channel.storefront_url === value);
+    if (channel) {
+      dispatch(setSelectedChannel(channel));
+    }
+  }, [channels, dispatch]);
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="page-head flex justify-between mb-6">
-        <div className="page-headLeft">
+        <div className="page-headLeft flex gap-4 justify-between w-full">
           <h1 className="text-2xl font-semibold text-gray-900">Technical</h1>
+         <div className="w-[250px] relative">
+          <Select defaultValue={selectedChannel?.storefront_url} onValueChange={handleChannelChange}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {
+                  channels && channels?.length > 0 && channels?.map((channel) => (
+                    <SelectItem key={channel.channel_id} value={channel.storefront_url}>
+                      {channel.storefront_url}
+                    </SelectItem>
+                  ))
+                }
+              </SelectContent>
+            </Select>
+            <div 
+             className="flex items-center gap-1 absolute -top-2 left-3 p-y-0.5 px-1 bg-white rounded">
+                <span className="text-xs font-medium text-gray-600">Channel</span>
+                <Link href={`${selectedChannel?.storefront_url}`} target="_blank" className="hover:text-gray-700">
+                  <SquareArrowOutUpRight className="w-3 h-3" />
+                </Link>
+            </div>
+         </div>
         </div>
 
-        <div className="page-headRight flex gap-4">
+        {/* <div className="page-headRight flex gap-4">
           <Link
             href="/"
             className="p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
@@ -69,10 +102,10 @@ export default function Technical() {
               height="20"
             />
           </Link>
-        </div>
+        </div> */}
       </div>
 
-      <div className="card bg-white rounded-xl px-4 py-4 mb-6">
+      {/* <div className="card bg-white rounded-xl px-4 py-4 mb-6">
         <div className="flex flex-col gap-4">
           <div className="flex gap-4">
             <div className="w-full">
@@ -107,7 +140,7 @@ export default function Technical() {
           </div>
 
         </div>
-      </div>
+      </div> */}
 
       <TechnicalTable />
     </div>

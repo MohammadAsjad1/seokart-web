@@ -26,7 +26,7 @@ export default function RootLayout({
 }) {
   const pathname = usePathname();
 
-  const noLayoutRoutes = ['/select-plan'];
+  const noLayoutRoutes = ['/select-plan', '/load'];
   const shouldShowLayout = !noLayoutRoutes.includes(pathname);
 
   return (

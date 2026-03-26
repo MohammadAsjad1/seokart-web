@@ -1,7 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
-const { installApp, uninstallApp } = require("../controllers/storeController");
+const {
+  installApp,
+  uninstallApp,
+  getChannelsList,
+  getFirstChannel,
+} = require("../controllers/storeController");
+const { auth } = require("../middleware/authMiddleware");
 
 function verifyWebhook(req, res, next) {
   console.log("Verify bigcommerce webhook:--------------- ", req.rawBody);
@@ -29,5 +35,8 @@ function verifyWebhook(req, res, next) {
 router.get("/install", installApp);
 
 router.get("/uninstall", uninstallApp);
+
+router.get("/channels/:storeHash", auth, getChannelsList);
+router.get("/channels/:storeHash/first", auth, getFirstChannel);
 
 module.exports = router;

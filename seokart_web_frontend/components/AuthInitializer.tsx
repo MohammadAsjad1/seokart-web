@@ -58,8 +58,13 @@ export function AuthInitializer({ children }: { children: React.ReactNode }) {
     if (!loading && hasCheckedAuth && user) {
       if (clearExpiredSession()) return;
       const isSetupRoute = pathname === SETUP_ROUTE;
+      const isLoadRoute = pathname === LOAD_ROUTE;
 
-      if (user.needsSetup && !isSetupRoute) {
+      // BigCommerce flow:
+      // - `/load` is the callback page and already has `signed_payload_jwt` in the URL.
+      // - `/load` auto-runs `completeSetup` after it loads the user.
+      // So we must NOT redirect away from `/load` while `needsSetup` is true.
+      if (user.needsSetup && !isSetupRoute && !isLoadRoute) {
         router.replace(SETUP_ROUTE);
       } else if (!user.needsSetup && isSetupRoute) {
         router.replace('/dashboard');

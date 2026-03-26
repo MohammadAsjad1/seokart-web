@@ -6,6 +6,7 @@ import scraperReducer from "./slices/scraperSlice";
 import userPlanReducer from "./slices/userPlanSlice";
 import rankTrackerReducer from "./slices/rankTrackerSlice";
 import socketReducer from "./slices/socketSlice";
+import channelReducer from "./slices/channelSlice";
 
 export const store = configureStore({
   reducer: {
@@ -15,6 +16,7 @@ export const store = configureStore({
     userPlan: userPlanReducer,
     rankTracker: rankTrackerReducer,
     socket: socketReducer,
+    channel: channelReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

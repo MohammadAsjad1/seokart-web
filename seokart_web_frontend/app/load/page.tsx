@@ -4,7 +4,8 @@ import { useAppDispatch } from "@/store/hooks";
 // import { setChannels, setSelectedChannel } from "@/store/slices/channelSlice";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { loadUser } from "@/store/slices/authSlice";
+import { completeSetup, loadUser } from "@/store/slices/authSlice";
+import { setChannels, setSelectedChannel } from "@/store/slices/channelSlice";
 
 function LoadPageContent() {
   const searchParams = useSearchParams();
@@ -21,7 +22,7 @@ function LoadPageContent() {
       }
       const result = await dispatch(loadUser(signedPayload)).unwrap();
       if (result.user) {
-        const { user, token, sessionExpiresAt } = result;
+        const { user, token, sessionExpiresAt, channels } = result;
         // console.log("user data --------------", user);
         localStorage.setItem("storeHash", user.store_hash);
         localStorage.setItem("userId", user._id);
@@ -29,9 +30,36 @@ function LoadPageContent() {
         localStorage.setItem("sessionExpiresAt", sessionExpiresAt);
         localStorage.setItem("storeId", user.store_id);
         localStorage.setItem("token", token);
-        router.replace(user.needsSetup ? `/select-plan` : `/dashboard`);
-      } else {
-        setError(result.message || "Failed to load user");
+        
+        if (channels && channels.length > 0) {
+          localStorage.setItem("channels", JSON.stringify(channels));
+          localStorage.setItem("selectedChannel", JSON.stringify(channels[0]));
+          dispatch(setChannels(channels));
+          dispatch(setSelectedChannel(channels[0]));
+        }else{
+          dispatch(setChannels([]));
+          dispatch(setSelectedChannel(null as any));
+        }
+        // router.replace(user.needsSetup ? `/select-plan` : `/dashboard`);
+        try {
+          if (user.needsSetup) {
+            await dispatch(
+              completeSetup({
+                plan: "free",
+                domain: user.primaryDomain || "",
+              }),
+            ).unwrap();
+            router.replace(`/dashboard`);
+          } else {
+            router.replace(`/dashboard`);
+          }
+        } catch (error) {
+          if (error instanceof Error) {
+            setError(error.message || "Failed to complete setup");
+          } else {
+            setError("Failed to complete setup");
+          }
+        }
       }
     };
     verifyAndRedirect();
@@ -39,7 +67,7 @@ function LoadPageContent() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen w-full">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-red-600 mb-4">Error</h1>
           <p>{error}</p>
@@ -49,7 +77,7 @@ function LoadPageContent() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen">
+    <div className="flex items-center justify-center min-h-screen w-full">
       <div className="text-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto mb-4"></div>
         <p>Loading your app...</p>

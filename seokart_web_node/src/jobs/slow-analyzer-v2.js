@@ -803,6 +803,7 @@ class SlowAnalyzerJobV2 {
   }
 
   async recalculateScoresChunk(chunk, userId, userActivityId) {
+    logger.info("calculating scores chunk", { userId, userActivityId,chunk:chunk.length });
     const concurrency = Math.min(config.concurrency.slow_analyzer || 8, 20);
     const limit = this.createConcurrencyLimiter(concurrency);
     const processOne = async (webpage) => {
@@ -850,7 +851,7 @@ class SlowAnalyzerJobV2 {
             noHttpLinks: newScores.noHttpLinks,
             noInternalBrokenLinks: newScores.noInternalBrokenLinks,
             noExternalBrokenLinks: newScores.noExternalBrokenLinks,
-            mobileResponsive: newScores.mobileResponsive,
+            // mobileResponsive: newScores.mobileResponsive,
             imagesHaveAltText: newScores.imagesHaveAltText,
             noGrammarSpellingErrors: newScores.noGrammarSpellingErrors,
             contentNotDuplicated: newScores.contentNotDuplicated,

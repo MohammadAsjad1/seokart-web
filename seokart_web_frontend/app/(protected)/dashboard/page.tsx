@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useCallback } from "react";
-import { ExternalLink, SlidersHorizontal, X, RefreshCw } from "lucide-react";
+import { ExternalLink, SlidersHorizontal, X, RefreshCw, SquareArrowOutUpRight } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   getDashboardData,
@@ -46,6 +46,9 @@ import {
 import DualRangeSlider from "@/components/ui/DualRangeSlider";
 import { selectUserPlan ,selectUserPlanLoading} from "@/store/selectors/userPlanSelectors";
 import { refreshUserPlan } from '@/store/slices/userPlanSlice';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import Link from "next/link";
+import { setSelectedChannel } from "@/store/slices/channelSlice";
 
 const LoadingSpinner = ({ size = "w-6 h-6", className = "" }) => (
   <div className={`${className} flex items-center justify-center`}>
@@ -166,6 +169,14 @@ const BacklinkDashboard = () => {
   const dispatch = useAppDispatch();
   const userPlan = useAppSelector(selectUserPlan);
   const userPlanLoading = useAppSelector(selectUserPlanLoading);
+  const { channels,selectedChannel } = useAppSelector((state) => state.channel);
+
+  const handleChannelChange = useCallback((value: string) => {
+    const channel = channels?.find((channel) => channel.storefront_url === value);
+    if (channel) {
+      dispatch(setSelectedChannel(channel));
+    }
+  }, [channels, dispatch]);
 
   const {
     dashboardData,
@@ -562,11 +573,29 @@ const BacklinkDashboard = () => {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-semibold text-gray-900">Backlink</h1>
-          <div className="flex gap-2">
-            <button className="p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
-              <ExternalLink className="w-4 h-4" />
-            </button>
-          </div>
+          <div className="w-[250px] relative">
+            <Select defaultValue={selectedChannel?.storefront_url} onValueChange={handleChannelChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select" />
+                </SelectTrigger>
+                <SelectContent>
+                  {
+                    channels && channels?.length > 0 && channels?.map((channel) => (
+                      <SelectItem key={channel.channel_id} value={channel.storefront_url}>
+                        {channel.storefront_url}
+                      </SelectItem>
+                    ))
+                  }
+                </SelectContent>
+              </Select>
+              <div 
+                className="flex items-center gap-1 absolute -top-2 left-3 p-y-0.5 px-1 bg-white rounded">
+                  <span className="text-xs font-medium text-gray-600">Channel</span>
+                  <Link href={`${selectedChannel?.storefront_url}`} target="_blank" className="hover:text-gray-700">
+                    <SquareArrowOutUpRight className="w-3 h-3" />
+                  </Link>
+              </div>
+         </div>
         </div>
 
         {error && (

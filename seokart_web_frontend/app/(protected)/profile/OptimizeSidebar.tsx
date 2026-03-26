@@ -92,6 +92,7 @@ interface Webpage {
       canonicalTagExists: number;
       mobileResponsive: number;
       noHttpLinks: number;
+      noRedirectLinks: number;
     };
   };
 }
@@ -449,7 +450,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
                   }
                 />
                 <AccordionItem
-                  label="H1 Tag Present on the Top"
+                  label="H1 Tag Present"
                   isSuccess={webpageData.scores?.scores?.oneH1Only === 5}
                   hasError={webpageData.scores?.scores?.oneH1Only !== 5}
                   errorContent={
@@ -641,11 +642,10 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
                 <AccordionItem
                   label="Redirect Links"
                   isSuccess={
-                    (webpageData.technical?.links?.redirectLinksCount || 0) ===
-                    0
+                    webpageData.scores?.scores?.noRedirectLinks === 5
                   }
                   hasError={
-                    (webpageData.technical?.links?.redirectLinksCount || 0) > 0
+                    webpageData.scores?.scores?.noRedirectLinks !== 5
                   }
                   errorContent={
                     <div>
@@ -732,7 +732,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
                     </div>
                   }
                 />
-                <AccordionItem
+                {/* <AccordionItem
                   label="Webpage is Mobile Responsive"
                   isSuccess={webpageData.scores?.scores?.mobileResponsive === 5}
                   hasError={webpageData.scores?.scores?.mobileResponsive !== 5}
@@ -746,7 +746,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
                       </p>
                     </div>
                   }
-                />
+                /> */}
               </ul>
             </div>
           </ScrollArea>
