@@ -631,7 +631,7 @@ export default function AddKeyword() {
             </div>
 
             <div className="page-headRight flex gap-4">
-              <Link
+              {/* <Link
                 href="/"
                 className="bg-gray-50 border border-slate-200 w-[46px] h-[38px] flex rounded-lg justify-center"
               >
@@ -641,7 +641,7 @@ export default function AddKeyword() {
                   width="20"
                   height="20"
                 />
-              </Link>
+              </Link> */}
 
               <Link
                 href="/"

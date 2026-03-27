@@ -1301,6 +1301,7 @@ class RankTrackerService {
   }
 
   async processChatGptData(keyword, userId, keywordId, month) {
+    console.log("processChatGptData called", keyword, userId, keywordId, month);
     try {
       const prompt = `Search for "${keyword}" and provide top 10 website recommendations with their URLs. Be specific about websites and include actual URLs when possible.`;
 
@@ -1472,7 +1473,7 @@ class RankTrackerService {
   }
 
   async updateKeywordRanking(keyword, targetResult, itemTypes = [], aiData) {
-    console.log(keyword, targetResult, itemTypes, aiData, "updateKeywordranking");
+    // console.log(keyword, targetResult, itemTypes, aiData, "updateKeywordranking");
     console.log("targetResult:--------- ", targetResult);
     const currentRanking = {
       position: targetResult?.rank_group || 101,
@@ -1747,10 +1748,15 @@ class RankTrackerService {
   }
 
   async getKeywordSuggestions(userId, seedKeywords, limit = 100) {
+    const normalizedKeywords = Array.isArray(seedKeywords)
+      ? seedKeywords.filter(Boolean).map((keyword) => String(keyword).trim()).filter(Boolean)
+      : [String(seedKeywords || "").trim()].filter(Boolean);
+    const trackingTaskId = `keywords_${Date.now()}_${userId}`;
+
     try {
       const payload = [
         {
-          keywords: Array.isArray(seedKeywords) ? seedKeywords : [seedKeywords],
+          keywords: normalizedKeywords,
           location_code: 2840,
           language_code: "en",
           limit: limit,
@@ -1759,18 +1765,21 @@ class RankTrackerService {
         },
       ];
 
-      const trackingTaskId = `keywords_${Date.now()}`;
-
       const usageRecord = await DataForSeoUsageTracker.trackApiCall({
         taskId: trackingTaskId,
         userId: userId,
         keywordId: null,
         endpoint: "keywords_data_google_keyword_ideas_live",
         requestData: {
-          keywords: Array.isArray(seedKeywords) ? seedKeywords : [seedKeywords],
-          location_code: 2840,
-          language_code: "en",
+          keyword: normalizedKeywords.join(", "),
+          location: "United States",
+          language: "en",
           limit: limit,
+          additionalParams: {
+            keywords: normalizedKeywords,
+            location_code: 2840,
+            language_code: "en",
+          },
         },
         apiType: "Keywords Data",
       });
@@ -1835,8 +1844,6 @@ class RankTrackerService {
       return [];
     } catch (error) {
       console.error("Error calling DataForSEO Keywords API:", error);
-
-      const trackingTaskId = `keywords_${Date.now()}`;
       await DataForSeoUsageTracker.updateApiCallResult(
         trackingTaskId,
         null,

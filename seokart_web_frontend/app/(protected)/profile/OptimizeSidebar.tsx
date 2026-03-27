@@ -360,7 +360,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
               <h3 className="text-lg font-semibold">Content Issues</h3>
               <ul>
                 <AccordionItem
-                  label="Content Length is Sufficient (More Than 200 Words)"
+                  label="Content Length is Sufficient (More Than 300 Words)"
                   isSuccess={
                     webpageData.scores?.scores?.contentNotTooShort === 5
                   }
@@ -374,7 +374,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
                         {webpageData.content?.wordCount || 0} words
                       </p>
                       <p className="text-sm text-gray-600 mt-1">
-                        Content should have at least 200 words for better SEO.
+                        Content should have at least 300 words for better SEO.
                       </p>
                     </div>
                   }

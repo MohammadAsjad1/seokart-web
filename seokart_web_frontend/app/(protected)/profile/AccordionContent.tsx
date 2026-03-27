@@ -396,7 +396,7 @@ export default function AccordionContent({
                       className="h-[38px] peer w-full bg-transparent placeholder:text-gray-400 placeholder:text-xs text-black text-xs border border-[#dee2e6] rounded-md px-3 py-3 transition duration-300 ease focus:outline-none focus:border-slate-400 hover:border-slate-300"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      disabled={loading}
+                      readOnly={loading}
                       placeholder="Search webpages urls..."
                     />
                   </div>

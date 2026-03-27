@@ -176,7 +176,8 @@ exports.completeSetup = async (req, res) => {
           limits: getPlanLimits(plan),
           usage: {
             domainsUsed: 1,
-            keywordsUsed: 0,
+            // keywordsUsed: 0,
+            keywordsUsed: 1,
             competitorsUsed: 0,
             updatesThisMonth: 0
           }
@@ -433,7 +434,7 @@ function getPlanLimits(plan) {
       domains: 1,
       keywords: 10,
       competitors: 3,
-      updateFrequency: 'weekly',
+      updateFrequency: 'monthly',
       aiTracking: true,
       historicalWeeks: 4
     },
@@ -441,7 +442,7 @@ function getPlanLimits(plan) {
       domains: 3,
       keywords: 100,
       competitors: 5,
-      updateFrequency: 'daily',
+      updateFrequency: 'monthly',
       aiTracking: true,
       historicalWeeks: 12
     },
@@ -449,7 +450,7 @@ function getPlanLimits(plan) {
       domains: 10,
       keywords: 500,
       competitors: 10,
-      updateFrequency: 'daily',
+      updateFrequency: 'monthly',
       aiTracking: true,
       historicalWeeks: 26
     },
@@ -457,7 +458,7 @@ function getPlanLimits(plan) {
       domains: -1, // unlimited
       keywords: -1,
       competitors: -1,
-      updateFrequency: 'daily',
+      updateFrequency: 'monthly',
       aiTracking: true,
       historicalWeeks: 52
     }

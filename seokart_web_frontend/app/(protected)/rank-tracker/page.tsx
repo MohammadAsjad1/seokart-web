@@ -67,14 +67,14 @@ export default function RankTracker() {
                     </Link>
                 </div>
               </div>
-              {/* {userPlan && (
-                <div className="flex items-center gap-4 mt-2">
+              {userPlan && (
+                <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <span>Keywords:</span>
                     <span className="font-medium">
                       {userPlan.rankTracker.usage.keywordsUsed} / {userPlan.rankTracker.limits.keywords === -1 ? '∞' : userPlan.rankTracker.limits.keywords}
                     </span>
-                    {keywordLimitReached && (
+                    {userPlan.rankTracker.usage.keywordsUsed >= userPlan.rankTracker.limits.keywords && (
                       <span className="text-red-500 text-xs">(Limit reached)</span>
                     )}
                   </div>
@@ -84,14 +84,14 @@ export default function RankTracker() {
                       {userPlan.rankTracker.usage.competitorsUsed} / {userPlan.rankTracker.limits.competitors === -1 ? '∞' : userPlan.rankTracker.limits.competitors}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                  {/* <div className="flex items-center gap-2 text-sm text-gray-600">
                     <span>Plan:</span>
                     <span className="font-medium capitalize text-blue-600">
                       {userPlan.rankTracker.plan}
                     </span>
-                  </div>
+                  </div> */}
                 </div>
-              )} */}
+              )}
             </div>
 
             <div className="page-headRight flex gap-4 h-10">
@@ -114,7 +114,7 @@ export default function RankTracker() {
                 />
               </Link> */}
 
-              <button
+              {/* <button
                 className="bg-white border border-slate-200 w-[46px] h-[38px] flex rounded-lg justify-center items-center hover:bg-gray-50 transition-colors"
                 title="Plan settings"
               >
@@ -124,7 +124,7 @@ export default function RankTracker() {
                   width="16"
                   height="14"
                 />
-              </button>
+              </button> */}
             </div>
           </div>
 

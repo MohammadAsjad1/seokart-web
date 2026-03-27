@@ -1682,29 +1682,43 @@ class CustomRankTrackerController {
       }
 
       const activeDomain = userplan.activeDomain;
+      const normalizedActiveDomain = this.normalizeDomain(activeDomain);
 
-      const activeRanking = await MonthlyRanking.findOne({
+      const allKeywordRankings = await MonthlyRanking.find({
         userId: userId,
         keywordId: keywordId,
-        domain: activeDomain,
+        // domain: activeDomain,
       });
+      const activeRanking =
+        allKeywordRankings.find(
+          (ranking) =>
+            this.normalizeDomain(ranking.domain) === normalizedActiveDomain
+        ) || null;
 
       const competitors = await Competitor.find({
         userId: userId,
         isActive: true,
       });
 
-      const competitorDomains =
-        competitors.length > 0 ? competitors.map((comp) => comp.domain) : [];
+      // const competitorDomains =
+      // competitors.length > 0 ? competitors.map((comp) => comp.domain) : [];
+      const competitorDomainMap = new Map(
+        competitors.map((comp) => [this.normalizeDomain(comp.domain), comp.domain])
+      );
 
-      const competitorRankings =
-        competitorDomains.length > 0
-          ? await MonthlyRanking.find({
-              userId: userId,
-              keywordId: keywordId,
-              domain: { $in: competitorDomains },
-            })
-          : [];
+      const competitorRankingsRaw = competitors.length > 0 ? allKeywordRankings : [];
+
+      // const competitorRankings =
+      //   competitorDomains.length > 0
+      //     ? await MonthlyRanking.find({
+      //         userId: userId,
+      //         keywordId: keywordId,
+      //         domain: { $in: competitorDomains },
+      //       })
+      //     : [];
+      const competitorRankings = competitorRankingsRaw.filter((ranking) =>
+        competitorDomainMap.has(this.normalizeDomain(ranking.domain))
+      );
 
       const formatDate = (dateString) => {
         const date = new Date(dateString + "-01");
@@ -1714,7 +1728,10 @@ class CustomRankTrackerController {
 
       const competitorsData = competitors.map((competitor) => {
         const competitorRanking = competitorRankings.find(
-          (ranking) => ranking.domain === competitor.domain
+          (ranking) =>
+            // (ranking) => ranking.domain === competitor.domain
+            this.normalizeDomain(ranking.domain) ===
+            this.normalizeDomain(competitor.domain)
         );
 
         if (!competitorRanking || competitorRanking.rankings.length === 0) {

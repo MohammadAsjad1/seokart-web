@@ -404,22 +404,37 @@ class WebScraper {
     };
   }
 
+   isHomepage(urlStr) {
+    try {
+      const url = new URL(urlStr);
+      // A homepage has a '/' path and no query parameters or hashes
+      return url.pathname === '/' && !url.search && !url.hash;
+    } catch (e) {
+      // If the URL string is invalid
+      return false;
+    }
+  }
+
   parseHtmlContent(html, url, statusCode) {
     const $ = cheerio.load(html);
     const websiteUrl = this.extractWebsiteUrl(url);
 
-    const links = this.extractDetailedLinkInfo($, url);
+    // const links = this.extractDetailedLinkInfo($, url);
 
-    $(
-      "script, style, noscript, nav, header, footer, aside, .advertisement, .ads, .social-share"
-    ).remove();
+    // if the url is not a homepage, remove the script, style, noscript, nav, header, footer, aside, .advertisement, .ads, .social-share tags
+    if (!this.isHomepage(url)) {
+      $(
+        "script, style, noscript, nav, header, footer, aside, .advertisement, .ads, .social-share"
+      ).remove();
+    }
+
 
     let title = $("title").text();
     title = this.cleanText(title);
 
     let metaDescription =
       $('meta[name="description"]').attr("content") ||
-      $('meta[property="og:description"]').attr("content") ||
+      // $('meta[property="og:description"]').attr("content") ||
       "";
     metaDescription = this.cleanText(metaDescription);
 
@@ -432,7 +447,7 @@ class WebScraper {
 
     const headings = this.extractHeadings($);
     const images = this.extractBasicImageInfo($);
-    // const links = this.extractDetailedLinkInfo($, url);
+    const links = this.extractDetailedLinkInfo($, url);
     const technical = this.extractBasicTechnicalInfo($);
     const wordCount = this.calculateWordCount(content);
 
