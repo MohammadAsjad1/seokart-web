@@ -29,6 +29,7 @@ export interface Webpage {
   updatedAt: string;
   crawledAt: string;
   isProcessed: boolean;
+  slowAnalysisCompleted: boolean;
   hasErrors?: boolean; // added this field to check if the webpage has errors
   statusCode?: number;
   lastCrawled?: string;

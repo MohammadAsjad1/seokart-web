@@ -29,7 +29,7 @@ class SequentialRotation {
     this.proxies = proxies;
     this.agents = proxies.map(proxy => new HttpsProxyAgent(proxy, {
       keepAlive: true,
-      timeout: 30000
+      timeout: 10000
     }));
     this.requestsPerProxy = requestsPerProxy;
     this.currentIndex = 0;
@@ -74,13 +74,22 @@ class SequentialRotation {
     return available[0].idx;
   }
 
+  getRandomProxy() {
+    const available = [...this.proxyStats.entries()]
+      .filter(([idx]) => !this.blockedProxies.has(idx));
+  
+    return available[Math.floor(Math.random() * available.length)][0];
+  }
+
   getNextProxy(skipCurrent = false) {
     if (skipCurrent || this.requestCount >= this.requestsPerProxy) {
-      this.currentIndex = this.findNextAvailableProxy();
+      // this.currentIndex = this.findNextAvailableProxy();
+      this.currentIndex = this.getRandomProxy();
       this.requestCount = 0;
-      console.log(
-        `🔄 Switching to proxy ${this.currentIndex + 1}/${this.proxies.length}`
-      );
+      // console.log(
+      //   `🔄 Switching to proxy ${this.currentIndex + 1}/${this.proxies.length}`
+      // );
+      logger.info(`🔄 Switching to proxy ${this.currentIndex + 1}/${this.proxies.length}`);
     }
 
     this.requestCount++;
@@ -193,16 +202,16 @@ class WebScraper {
       consecutive_failures: 0,
     };
 
-    this.rotationHandler = new SequentialRotation(PROXIES, 100);
+    this.rotationHandler = new SequentialRotation(PROXIES, 30);
     this.shouldStop = false;
     this.MAX_CONSECUTIVE_FAILURES = 25;
 
-    console.log("🎯 Sequential rotation initialized - 100 requests per proxy");
+    logger.info("🎯 Sequential rotation initialized - 30 requests per proxy");
   }
 
   stopScraping() {
     this.shouldStop = true;
-    console.log("🛑 Stop signal received - will finish current batch");
+    logger.info("🛑 Stop signal received - will finish current batch");
   }
 
   resetStopSignal() {
@@ -229,7 +238,7 @@ class WebScraper {
     }
 
     const maxRetries = options.maxRetries || 2;
-    const timeout = options.timeout || 30000;
+    const timeout = options.timeout || 10000;
 
     let lastError = null;
 
@@ -243,14 +252,14 @@ class WebScraper {
 
       if (attempt > 0) {
         this.stats.retried_requests++;
-        console.log(`🔁 Retry attempt ${attempt}/${maxRetries} for ${url}`);
+        logger.info(`🔁 Retry attempt ${attempt}/${maxRetries} for ${url}`);
       }
 
       const { proxy, agent, proxyIndex, userAgent } =
         this.rotationHandler.getNextProxy(attempt > 0);
 
       try {
-        console.log(
+        logger.info(
           `🌐 Request #${this.stats.requests_made} to ${url} via proxy ${proxyIndex + 1
           }`
         );
@@ -270,7 +279,8 @@ class WebScraper {
             Accept:
               "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
+            // "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": "gzip, deflate",
             Connection: "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",
@@ -294,9 +304,9 @@ class WebScraper {
         this.stats.consecutive_failures = 0;
         this.rotationHandler.recordSuccess(proxyIndex);
 
-        console.log(
-          `✅ Success! Response time: ${responseTime}ms via proxy ${proxyIndex + 1
-          }`
+        logger.info(
+          `✅ Success! Response time: ${responseTime}ms url: ${url} via [proxy-${proxyIndex + 1
+          }]`
         );
 
         const scraped_data = this.parseHtmlContent(
@@ -308,7 +318,7 @@ class WebScraper {
         scraped_data.scraping_method = "nodejs_axios_proxy";
         scraped_data.proxy_used = proxyIndex + 1;
         scraped_data.attempt_number = attempt + 1;
-        scraped_data.rawHtml = response.data;
+        // scraped_data.rawHtml = response.data;
 
         this.updateAverageResponseTime(responseTime);
         return scraped_data;
@@ -335,7 +345,10 @@ class WebScraper {
           //   `❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`
           // );
           logger.error(`❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`);
-          this.rotationHandler.markProxyAsBlocked(proxyIndex);
+          // this.rotationHandler.markProxyAsBlocked(proxyIndex);
+          if (this.rotationHandler.proxyStats.get(proxyIndex).failed > 10 && this.rotationHandler.proxyStats.get(proxyIndex).successful === 0) {
+            this.markProxyAsBlocked(proxyIndex);
+          }
         } else {
           // console.error(
           //   `❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`
@@ -344,7 +357,7 @@ class WebScraper {
         }
 
         if (this.stats.consecutive_failures >= this.MAX_CONSECUTIVE_FAILURES) {
-          console.error(
+          logger.error(
             `💥 Max consecutive failures (${this.MAX_CONSECUTIVE_FAILURES}) reached. Stopping scraper.`
           );
           this.shouldStop = true;
@@ -357,12 +370,12 @@ class WebScraper {
           break;
         }
 
-        await this.sleep(1000 * (attempt + 1));
+        await this.sleep(500 + Math.random() * 1500);
       }
     }
 
     this.stats.failed_requests++;
-    console.error(
+    logger.error(
       `💥 All attempts failed for ${url}. Last error: ${lastError.message}`
     );
     throw new Error(

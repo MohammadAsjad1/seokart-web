@@ -631,7 +631,7 @@ export default function TechnicalTable() {
                             <TableRow>
                               <TableCell colSpan={9} className="p-0">
                                 <div className="overflow-hidden animate-slideDown">
-                                  <AccordionContent activityId={activity._id} />
+                                  <AccordionContent activityId={activity._id} isCompleted={isCompleted}/>
                                 </div>
                               </TableCell>
                             </TableRow>

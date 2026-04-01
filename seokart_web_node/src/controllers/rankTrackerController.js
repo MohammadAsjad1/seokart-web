@@ -811,6 +811,9 @@ class CustomRankTrackerController {
         console.error("Error updating competitor suggestion flags:", flagError);
       }
 
+      userPlan.rankTracker.usage.competitorsUsed = finalCount;
+      await userPlan.save();
+
       const allCompetitors = [...savedCompetitors, ...updatedCompetitors];
 
       res.status(201).json({

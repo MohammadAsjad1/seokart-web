@@ -1303,8 +1303,26 @@ class RankTrackerService {
   async processChatGptData(keyword, userId, keywordId, month) {
     console.log("processChatGptData called", keyword, userId, keywordId, month);
     try {
-      const prompt = `Search for "${keyword}" and provide top 10 website recommendations with their URLs. Be specific about websites and include actual URLs when possible.`;
+      // const prompt = `Search for "${keyword}" and provide top 10 website recommendations with their URLs. Be specific about websites and include actual URLs when possible.`;
+      const prompt = `
+      Provide exactly 10 real websites for the keyword: "${keyword}".
+      
+      Rules:
+      - Always include full URLs (https://...)
+      - Only real, existing websites (no examples or placeholders)
+      - Avoid duplicates
+      - Format as JSON array like:
+      
+      [
+        {
+          "title": "Website name",
+          "url": "https://example.com",
+          "description": "short reason"
+        }
+      ]
+      `;
 
+      
       const response = await axios.post(
         this.chatGptConfig.baseURL,
         {
@@ -1368,62 +1386,102 @@ class RankTrackerService {
     }
   }
 
+  // extractDomainsFromChatGptResponse(response) {
+  //   const results = [];
+  //   const foundDomains = new Set();
+
+  //   const urlRegex = /https?:\/\/(www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/g;
+  //   let match;
+  //   while ((match = urlRegex.exec(response)) !== null) {
+  //     const domain = this.extractDomain(match[0]);
+  //     if (domain && !foundDomains.has(domain)) {
+  //       foundDomains.add(domain);
+  //       results.push({
+  //         domain: domain,
+  //         url: match[0],
+  //         title: `Mentioned in ChatGPT response`,
+  //         snippet: this.extractContextAroundDomain(response, match[0]),
+  //         mentionContext: "URL recommendation by ChatGPT",
+  //       });
+  //     }
+  //   }
+
+  //   const domainRegex = /(?:^|\s|[^\w])([a-zA-Z0-9-]+\.[a-zA-Z]{2,})(?=\s|[^\w]|$)/g;
+  //   while ((match = domainRegex.exec(response)) !== null) {
+  //     const domain = this.extractDomain(match[1]);
+  //     if (domain && !foundDomains.has(domain) && this.isValidDomain(domain)) {
+  //       foundDomains.add(domain);
+  //       results.push({
+  //         domain: domain,
+  //         url: `https://${match[1]}`,
+  //         title: `Mentioned in ChatGPT response`,
+  //         snippet: this.extractContextAroundDomain(response, match[1]),
+  //         mentionContext: "Domain recommendation by ChatGPT",
+  //       });
+  //     }
+  //   }
+
+  //   const commonPatterns = [
+  //     /(?:visit|check|go to|website|site)[\s:]*([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/gi,
+  //     /([a-zA-Z0-9-]+\.(?:com|org|net|edu|gov|io|co))(?=\s|$|[^\w])/gi,
+  //   ];
+
+  //   commonPatterns.forEach((pattern) => {
+  //     while ((match = pattern.exec(response)) !== null) {
+  //       const domain = this.extractDomain(match[1]);
+  //       if (domain && !foundDomains.has(domain) && this.isValidDomain(domain)) {
+  //         foundDomains.add(domain);
+  //         results.push({
+  //           domain: domain,
+  //           url: `https://${match[1]}`,
+  //           title: `Mentioned in ChatGPT response`,
+  //           snippet: this.extractContextAroundDomain(response, match[1]),
+  //           mentionContext: "Pattern-based recommendation by ChatGPT",
+  //         });
+  //       }
+  //     }
+  //   });
+
+  //   return results.slice(0, 10);
+  // }
   extractDomainsFromChatGptResponse(response) {
     const results = [];
     const foundDomains = new Set();
-
-    const urlRegex = /https?:\/\/(www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/g;
+  
+    const normalize = (d) => d.replace(/^www\./, "").toLowerCase();
+  
+    const addDomain = (domain, url) => {
+      const normalized = normalize(domain);
+      if (!this.isValidDomain(normalized) || foundDomains.has(normalized)) return;
+  
+      foundDomains.add(normalized);
+      results.push({
+        domain: normalized,
+        url: url || `https://${domain}`,
+        title: "Mentioned in ChatGPT response",
+        snippet: this.extractContextAroundDomain(response, domain),
+        mentionContext: "Detected in response",
+      });
+    };
+  
+    // 1. Extract URLs
+    const urlRegex = /https?:\/\/([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?/g;
     let match;
+  
     while ((match = urlRegex.exec(response)) !== null) {
-      const domain = this.extractDomain(match[0]);
-      if (domain && !foundDomains.has(domain)) {
-        foundDomains.add(domain);
-        results.push({
-          domain: domain,
-          url: match[0],
-          title: `Mentioned in ChatGPT response`,
-          snippet: this.extractContextAroundDomain(response, match[0]),
-          mentionContext: "URL recommendation by ChatGPT",
-        });
-      }
+      try {
+        const domain = new URL(match[0]).hostname;
+        addDomain(domain, match[0]);
+      } catch {}
     }
-
-    const domainRegex = /(?:^|\s|[^\w])([a-zA-Z0-9-]+\.[a-zA-Z]{2,})(?=\s|[^\w]|$)/g;
+  
+    // 2. Extract domains (including subdomains)
+    const domainRegex = /(?:^|\s|[^\w])((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})(?=\s|[^\w]|$)/g;
+  
     while ((match = domainRegex.exec(response)) !== null) {
-      const domain = this.extractDomain(match[1]);
-      if (domain && !foundDomains.has(domain) && this.isValidDomain(domain)) {
-        foundDomains.add(domain);
-        results.push({
-          domain: domain,
-          url: `https://${match[1]}`,
-          title: `Mentioned in ChatGPT response`,
-          snippet: this.extractContextAroundDomain(response, match[1]),
-          mentionContext: "Domain recommendation by ChatGPT",
-        });
-      }
+      addDomain(match[1]);
     }
-
-    const commonPatterns = [
-      /(?:visit|check|go to|website|site)[\s:]*([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/gi,
-      /([a-zA-Z0-9-]+\.(?:com|org|net|edu|gov|io|co))(?=\s|$|[^\w])/gi,
-    ];
-
-    commonPatterns.forEach((pattern) => {
-      while ((match = pattern.exec(response)) !== null) {
-        const domain = this.extractDomain(match[1]);
-        if (domain && !foundDomains.has(domain) && this.isValidDomain(domain)) {
-          foundDomains.add(domain);
-          results.push({
-            domain: domain,
-            url: `https://${match[1]}`,
-            title: `Mentioned in ChatGPT response`,
-            snippet: this.extractContextAroundDomain(response, match[1]),
-            mentionContext: "Pattern-based recommendation by ChatGPT",
-          });
-        }
-      }
-    });
-
+  
     return results.slice(0, 10);
   }
 

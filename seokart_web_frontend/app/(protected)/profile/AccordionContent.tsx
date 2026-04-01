@@ -38,6 +38,7 @@ import { getErrorCounts } from "@/store/slices/scraperSlice";
 
 interface AccordionContentProps {
   activityId: string;
+  isCompleted: boolean;
 }
 
 const dropdownPageFilter = [
@@ -53,6 +54,7 @@ const POLLING_INTERVAL = 3000;
 
 export default function AccordionContent({
   activityId,
+  isCompleted,
 }: AccordionContentProps) {
   const dispatch = useAppDispatch();
   const {
@@ -150,10 +152,10 @@ export default function AccordionContent({
   }, [activityId, dispatch]);
 
   useEffect(() => {
-    if (activityId) {
+    if (activityId && isCompleted) {
       fetchErrorCounts();
     }
-  }, [activityId, fetchErrorCounts]);
+  }, [activityId, fetchErrorCounts, isCompleted]);
 
   const handleScrapeWebpage = useCallback(
     async (e: React.MouseEvent, webpage: any) => {
@@ -250,7 +252,7 @@ export default function AccordionContent({
   }, [currentPage, sortValue, activityId, activeTab]);
 
   useEffect(() => {
-    if (initialized && activityId && activeTab === "webpages") {
+    if (initialized && activityId && activeTab === "webpages" && isCompleted) {
       const delayDebounceFn = setTimeout(() => {
         setCurrentPage(1);
         fetchWebpagesWithFilters();
@@ -258,7 +260,7 @@ export default function AccordionContent({
 
       return () => clearTimeout(delayDebounceFn);
     }
-  }, [searchTerm]);
+  }, [searchTerm, isCompleted]);
 
   const renderPaginationItems = useMemo(() => {
     if (!pagination) return null;
@@ -468,7 +470,7 @@ export default function AccordionContent({
                         webpages.map((webpage) => {
                           const isLoading = isWebpageLoading(webpage._id);
                           const showProcessingState =
-                            isLoading || !webpage.isProcessed;
+                            isLoading || !webpage.isProcessed || !isCompleted;
                           const hasErrors = webpage.hasErrors;
 
                           return (
