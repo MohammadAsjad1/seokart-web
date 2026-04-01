@@ -5,7 +5,7 @@ const logger = require("../config/logger");
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SIMHASH_HAMMING_THRESHOLD = 3; // 64-bit: only ~95%+ match (1 - 3/64). Stricter to avoid false duplicates.
 const SIMHASH_MAX_FEATURES = 128;
-const WORD_SHINGLE_SIZE = 8;
+const WORD_SHINGLE_SIZE = 6;
 const SIMHASH_BITS = 64;
 const JENKINS_SALT_HIGH = "\x01"; // salt for high 32 bits of 64-bit shingle hash
 
@@ -267,11 +267,11 @@ class DuplicateProcessorV2 {
         if (titleNorm) {
           const others = titleExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
-            duplicates.titleDuplicates = others.map(e => ({ pageUrl: e.pageUrl, title: e.title, duplicateType: "exact_match", similarity: 1.0 }));
+            duplicates.titleDuplicates = others.map(e => ({ pageUrl: e.pageUrl, title: e.title || "", duplicateType: "exact_match", similarity: 1.0 }));
             this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
           }
           if (titleCount < STORE_MAX_TITLES) {
-            titleExisting.push({ _id: idStr, pageUrl: page.pageUrl });
+            titleExisting.push({ _id: idStr, pageUrl: page.pageUrl, title: page.title || "" });
             if (!redis) store.titles.set(titleNorm, titleExisting);
           }
         }
@@ -280,11 +280,11 @@ class DuplicateProcessorV2 {
         if (descNorm) {
           const others = descExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
           if (others.length > 0) {
-            duplicates.descriptionDuplicates = others.map(e => ({ pageUrl: e.pageUrl, description: e.metaDescription, duplicateType: "exact_match", similarity: 1.0 }));
+            duplicates.descriptionDuplicates = others.map(e => ({ pageUrl: e.pageUrl, description: e.metaDescription || e.description || "", duplicateType: "exact_match", similarity: 1.0 }));
             this.stats.descriptionDuplicatesFound += duplicates.descriptionDuplicates.length;
           }
           if (descCount < STORE_MAX_DESCRIPTIONS) {
-            descExisting.push({ _id: idStr, pageUrl: page.pageUrl });
+            descExisting.push({ _id: idStr, pageUrl: page.pageUrl, metaDescription: page.metaDescription || "" });
             if (!redis) store.descriptions.set(descNorm, descExisting);
           }
         }
@@ -513,10 +513,11 @@ class DuplicateProcessorV2 {
       return (BigInt(high) << 32n) | BigInt(low);
     });
     const unique = [...new Set(hashes)];
-    const selected = unique;
-      // unique.length > SIMHASH_MAX_FEATURES
-      //   ? unique.slice(0, SIMHASH_MAX_FEATURES)
-      //   : unique;
+    // const selected = unique;
+    const selected = 
+      unique.length > SIMHASH_MAX_FEATURES
+        ? unique.slice(0, SIMHASH_MAX_FEATURES)
+        : unique;
 
     let simhash = 0n;
     for (let pos = 0; pos < SIMHASH_BITS; pos++) {
@@ -694,11 +695,15 @@ class DuplicateProcessorV2 {
         }
 
         if (titleNorm && titleCount < STORE_MAX_TITLES) {
-          titleExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+          titleExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl, title: page.title || "" });
           if (!redis) store.titles.set(titleNorm, titleExisting);
         }
         if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
-          descExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl });
+          descExisting.push({
+            _id: page._id.toString(),
+            pageUrl: page.pageUrl,
+            metaDescription: page.metaDescription || "",
+          });
           if (!redis) store.descriptions.set(descNorm, descExisting);
         }
 
