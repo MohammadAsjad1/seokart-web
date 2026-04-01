@@ -1,5 +1,6 @@
-const backlinkService = require('../services/backlinkService');
-
+const backlinkService = require("../services/backlinkService");
+const logger = require("../config/logger");
+const BacklinkSummary = require("../models/BacklinkSummary");
 /**
  * Get paginated backlink data for dashboard
  * @route GET /api/backlinks/dashboard
@@ -8,11 +9,11 @@ const backlinkService = require('../services/backlinkService');
 const getBacklinkDataForDashboard = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    
+
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: 'User authentication required'
+        message: "User authentication required",
       });
     }
 
@@ -29,13 +30,13 @@ const getBacklinkDataForDashboard = async (req, res) => {
       minDomainScore,
       maxDomainScore,
       linkTypes,
-      anchorText
+      anchorText,
     } = req.query;
 
-    if (!websiteUrl || typeof websiteUrl !== 'string') {
+    if (!websiteUrl || typeof websiteUrl !== "string") {
       return res.status(400).json({
         success: false,
-        message: 'websiteUrl is required'
+        message: "websiteUrl is required",
       });
     }
 
@@ -43,7 +44,7 @@ const getBacklinkDataForDashboard = async (req, res) => {
     if (trimmedUrl.length < 3) {
       return res.status(400).json({
         success: false,
-        message: 'websiteUrl must be at least 3 characters long'
+        message: "websiteUrl must be at least 3 characters long",
       });
     }
 
@@ -51,115 +52,187 @@ const getBacklinkDataForDashboard = async (req, res) => {
     if (firstSeenFromDate && isNaN(new Date(firstSeenFromDate).getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid firstSeenFromDate format'
+        message: "Invalid firstSeenFromDate format",
       });
     }
 
     if (firstSeenToDate && isNaN(new Date(firstSeenToDate).getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid firstSeenToDate format'
+        message: "Invalid firstSeenToDate format",
       });
     }
 
     if (lastSeenFromDate && isNaN(new Date(lastSeenFromDate).getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid lastSeenFromDate format'
+        message: "Invalid lastSeenFromDate format",
       });
     }
 
     if (lastSeenToDate && isNaN(new Date(lastSeenToDate).getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid lastSeenToDate format'
+        message: "Invalid lastSeenToDate format",
       });
     }
 
     // Validate domain score range
-    if (minDomainScore && (isNaN(minDomainScore) || minDomainScore < 0 || minDomainScore > 100)) {
+    if (
+      minDomainScore &&
+      (isNaN(minDomainScore) || minDomainScore < 0 || minDomainScore > 100)
+    ) {
       return res.status(400).json({
         success: false,
-        message: 'minDomainScore must be between 0 and 100'
+        message: "minDomainScore must be between 0 and 100",
       });
     }
 
-    if (maxDomainScore && (isNaN(maxDomainScore) || maxDomainScore < 0 || maxDomainScore > 100)) {
+    if (
+      maxDomainScore &&
+      (isNaN(maxDomainScore) || maxDomainScore < 0 || maxDomainScore > 100)
+    ) {
       return res.status(400).json({
         success: false,
-        message: 'maxDomainScore must be between 0 and 100'
+        message: "maxDomainScore must be between 0 and 100",
       });
     }
 
     // Parse link types array
     let parsedLinkTypes = [];
     if (linkTypes) {
-      if (typeof linkTypes === 'string') {
-        parsedLinkTypes = linkTypes.split(',').map(t => t.trim().toLowerCase());
+      if (typeof linkTypes === "string") {
+        parsedLinkTypes = linkTypes
+          .split(",")
+          .map((t) => t.trim().toLowerCase());
       } else if (Array.isArray(linkTypes)) {
-        parsedLinkTypes = linkTypes.map(t => String(t).trim().toLowerCase());
+        parsedLinkTypes = linkTypes.map((t) => String(t).trim().toLowerCase());
       }
-      
-      const validTypes = ['dofollow', 'nofollow'];
-      parsedLinkTypes = parsedLinkTypes.filter(t => validTypes.includes(t));
+
+      const validTypes = ["dofollow", "nofollow"];
+      parsedLinkTypes = parsedLinkTypes.filter((t) => validTypes.includes(t));
     }
 
     const options = {
       websiteUrl: trimmedUrl,
       page: page ? parseInt(page) : 1,
       limit: limit ? parseInt(limit) : 10,
-      query: query ? query.trim() : '',
+      query: query ? query.trim() : "",
       firstSeenFromDate,
       firstSeenToDate,
       lastSeenFromDate,
       lastSeenToDate,
-      sortBy: sortBy || 'inlink_rank',
+      sortBy: sortBy || "inlink_rank",
       minDomainScore: minDomainScore ? parseInt(minDomainScore) : undefined,
       maxDomainScore: maxDomainScore ? parseInt(maxDomainScore) : undefined,
       linkTypes: parsedLinkTypes,
-      anchorText: anchorText ? anchorText.trim() : ''
+      anchorText: anchorText ? anchorText.trim() : "",
     };
 
     if (isNaN(options.page) || options.page < 1) {
       return res.status(400).json({
         success: false,
-        message: 'Page must be a positive integer'
+        message: "Page must be a positive integer",
       });
     }
 
     if (isNaN(options.limit) || options.limit < 1 || options.limit > 100) {
       return res.status(400).json({
         success: false,
-        message: 'Limit must be between 1 and 100'
+        message: "Limit must be between 1 and 100",
       });
     }
 
-    const result = await backlinkService.getBacklinkDataForDashboard(userId, options);
+    const result = await backlinkService.getBacklinkDataForDashboard(
+      userId,
+      options,
+    );
 
     if (!result.success) {
       return res.status(result.statusCode || 500).json({
         success: false,
-        message: result.error || 'Failed to fetch backlink data'
+        message: result.error || "Failed to fetch backlink data",
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Backlink data retrieved successfully',
-      data: result.data
+      message: "Backlink data retrieved successfully",
+      data: result.data,
     });
-
   } catch (error) {
-    console.error('[BACKLINK-CONTROLLER] Error:', error.message);
-    
+    console.error("[BACKLINK-CONTROLLER] Error:", error.message);
+
     return res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+const syncBacklinkData = async (req, res) => {
+  logger.info("[BACKLINK-CONTROLLER] Syncing Backlink Data for website: ", req.query.websiteUrl);
+  try {
+    const userId = req.user?.id || req.user?._id;
+    if (!userId) {
+      logger.error("[BACKLINK-CONTROLLER] User authentication required");
+      return res.status(401).json({
+        success: false,
+        message: "User authentication required",
+      });
+    }
+    const websiteUrl = req.query.websiteUrl;
+    if (!websiteUrl || typeof websiteUrl !== "string") {
+      logger.error("[BACKLINK-CONTROLLER] websiteUrl is required", {userId, });
+      return res.status(400).json({
+        success: false,
+        message: "websiteUrl is required",
+      });
+    }
+    const trimmedUrl = websiteUrl.trim();
+    if (trimmedUrl.length < 3) {
+      logger.error("[BACKLINK-CONTROLLER] websiteUrl must be at least 3 characters long",{userId, websiteUrl});
+      return res.status(400).json({ 
+        success: false,
+        message: "websiteUrl must be at least 3 characters long",
+      });
+    }
+
+    const existingSummary = await BacklinkSummary.findOne({
+      userId,
+      websiteUrl: trimmedUrl,
+    });
+    if (
+      existingSummary &&
+      existingSummary.status === "completed" &&
+      existingSummary.lastFetched &&
+      new Date(existingSummary.lastFetched).getTime() >
+        new Date().getTime() - 1000 * 60 * 60 * 24 * 7
+    ) {
+      // 7 days
+      return res.status(400).json({
+        success: false,
+        message: "Backlink summary already exists and is less than 7 days old",
+      });
+    }
+
+    const result = await backlinkService.fetchAndUpdateBacklinkData(
+      userId,
+      trimmedUrl,
+    );
+    return res.status(result.statusCode || 200).json(result);
+  } catch (error) {
+    logger.error("[BACKLINK-CONTROLLER] Error Syncing Backlink Data:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 module.exports = {
-  getBacklinkDataForDashboard
+  getBacklinkDataForDashboard,
+  syncBacklinkData,
 };

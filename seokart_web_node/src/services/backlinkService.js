@@ -307,14 +307,27 @@ async function fetchAndUpdateBacklinkData(userId, websiteUrl) {
 
     // Create backlinks data
     try {
-      const backlinksData = await BacklinkDataModel.insertMany(
-        backlinksResult.data.map((backlink) => ({
-          backlink_summary_id: updatedDoc._id,
-          ...backlink,
-        })),
-      );
+      // const backlinksData = await BacklinkDataModel.insertMany(
+      //   backlinksResult.data.map((backlink) => ({
+      //     backlink_summary_id: updatedDoc._id,
+      //     ...backlink,
+      //   })),
+      // );
+      const batchSize = parseInt(process.env.BACKLINK_INSERT_BATCH, 10) || 1000;
+      for (let i = 0; i < backlinksResult.data.length; i += batchSize) {
+        const batch = backlinksResult.data.slice(i, i + batchSize);
+         await BacklinkDataModel.bulkWrite([
+          batch.map((backlink) => ({
+            updateOne: {
+              filter: { backlink_summary_id: updatedDoc._id, url_from: backlink.url_from },
+              update: { $set: backlink },
+              upsert: true,
+            },
+          })),
+        ]);
+      }
       console.log(
-        `[BACKLINK-SERVICE] Created ${backlinksData.length} backlinks data`,
+        `[BACKLINK-SERVICE] Created batch of ${batchSize} backlinks data`,
       );
     } catch (error) {
       console.error(

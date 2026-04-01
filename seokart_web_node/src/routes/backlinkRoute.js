@@ -9,4 +9,9 @@ router.get(
   backlinkController.getBacklinkDataForDashboard
 );
 
+router.get(
+  '/sync',
+  auth,
+  backlinkController.syncBacklinkData
+);
 module.exports = router;

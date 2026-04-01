@@ -12,7 +12,8 @@ const backlinkDataSchema = new mongoose.Schema(
       type: String, 
       required: true, 
       maxlength: 1000,
-      trim: true
+      trim: true,
+      index: true
     },
     url_to: { 
       type: String, 

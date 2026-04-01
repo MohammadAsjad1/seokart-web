@@ -1,7 +1,13 @@
 "use client";
 
 import React, { useEffect, useRef, useCallback } from "react";
-import { ExternalLink, SlidersHorizontal, X, RefreshCw, SquareArrowOutUpRight } from "lucide-react";
+import {
+  ExternalLink,
+  SlidersHorizontal,
+  X,
+  RefreshCw,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   getDashboardData,
@@ -19,6 +25,7 @@ import {
   setLinkTypes,
   setAnchorText,
   clearError,
+  syncBacklinkData,
 } from "@/store/slices/backlinkSlice";
 import {
   Table,
@@ -44,11 +51,21 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import DualRangeSlider from "@/components/ui/DualRangeSlider";
-import { selectUserPlan ,selectUserPlanLoading} from "@/store/selectors/userPlanSelectors";
-import { refreshUserPlan } from '@/store/slices/userPlanSlice';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  selectUserPlan,
+  selectUserPlanLoading,
+} from "@/store/selectors/userPlanSelectors";
+import { refreshUserPlan } from "@/store/slices/userPlanSlice";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import Link from "next/link";
 import { setSelectedChannel } from "@/store/slices/channelSlice";
+import { showToast } from "@/lib/toast";
 
 const LoadingSpinner = ({ size = "w-6 h-6", className = "" }) => (
   <div className={`${className} flex items-center justify-center`}>
@@ -67,7 +84,7 @@ const CircularSkeleton = () => (
   </div>
 );
 
-const StatCardSkeleton = ({ title="", hasProgress = false }) => (
+const StatCardSkeleton = ({ title = "", hasProgress = false }) => (
   <div className="card bg-white rounded-xl px-4 py-4">
     <h3 className="text-lg font-semibold text-black mb-4">{title}</h3>
     <div className={`${hasProgress ? "mb-4" : ""}`}>
@@ -169,14 +186,21 @@ const BacklinkDashboard = () => {
   const dispatch = useAppDispatch();
   const userPlan = useAppSelector(selectUserPlan);
   const userPlanLoading = useAppSelector(selectUserPlanLoading);
-  const { channels,selectedChannel } = useAppSelector((state) => state.channel);
+  const { channels, selectedChannel } = useAppSelector(
+    (state) => state.channel,
+  );
 
-  const handleChannelChange = useCallback((value: string) => {
-    const channel = channels?.find((channel) => channel.storefront_url === value);
-    if (channel) {
-      dispatch(setSelectedChannel(channel));
-    }
-  }, [channels, dispatch]);
+  const handleChannelChange = useCallback(
+    (value: string) => {
+      const channel = channels?.find(
+        (channel) => channel.storefront_url === value,
+      );
+      if (channel) {
+        dispatch(setSelectedChannel(channel));
+      }
+    },
+    [channels, dispatch],
+  );
 
   const {
     dashboardData,
@@ -262,37 +286,34 @@ const BacklinkDashboard = () => {
       linkTypes,
       anchorText,
       dispatch,
-    ]
+    ],
   );
 
   useEffect(() => {
     dispatch(refreshUserPlan());
   }, [dispatch]);
 
-
   useEffect(() => {
-  const websiteUrl = getWebsiteUrl();
+    const websiteUrl = getWebsiteUrl();
 
-  
-  if (!websiteUrl || !userPlan) {
-    return;
-  }
+    if (!websiteUrl || !userPlan) {
+      return;
+    }
 
-  if (!hasInitialized.current) {
-    const options = {
-      page: 1,
-      limit: itemsPerPage,
-      query: "",
-      sortBy: "inlink_rank",
-      minDomainScore: 0,
-      maxDomainScore: 100,
-    };
-    dispatch(setCurrentPage(1));
-    dispatch(getDashboardData({ websiteUrl, options }));
-    hasInitialized.current = true;
-  }
-}, [userPlan, dispatch, itemsPerPage,getWebsiteUrl]);
-
+    if (!hasInitialized.current) {
+      const options = {
+        page: 1,
+        limit: itemsPerPage,
+        query: "",
+        sortBy: "inlink_rank",
+        minDomainScore: 0,
+        maxDomainScore: 100,
+      };
+      dispatch(setCurrentPage(1));
+      dispatch(getDashboardData({ websiteUrl, options }));
+      hasInitialized.current = true;
+    }
+  }, [userPlan, dispatch, itemsPerPage, getWebsiteUrl]);
 
   useEffect(() => {
     const websiteUrl = getWebsiteUrl();
@@ -403,6 +424,17 @@ const BacklinkDashboard = () => {
     maxDomainScore,
     userPlan,
   ]);
+
+  const handleSyncBacklinkData = async () => {
+    const websiteUrl = getWebsiteUrl();
+    if (websiteUrl) {
+      dispatch(clearError());
+      await dispatch(syncBacklinkData({ websiteUrl }));
+      showToast("Backlink data synced successfully", "success");
+    } else {
+      showToast("Please select a website", "error");
+    }
+  };
 
   const dropdownPageFilter = [
     { value: "lastFetched", label: "Latest" },
@@ -572,30 +604,59 @@ const BacklinkDashboard = () => {
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="mb-6">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Backlink</h1>
+          <div className="flex items-center">
+            <h1 className="text-2xl font-semibold text-gray-900">Backlink</h1>
+            <Button
+              size="sm"
+              className="ml-4 bg-zinc-800 text-white"
+              onClick={handleSyncBacklinkData}
+              disabled={
+                processing ||
+                (backlinkSummary?.lastFetched ? (new Date().getTime() -
+                    new Date(
+                        backlinkSummary?.lastFetched,
+                      ).getTime() <
+                      1000 * 60 * 60 * 24 * 7) : false)
+              }
+            >
+              Sync
+              <RefreshCw
+                className={`${processing ? "animate-spin" : ""} w-3 h-3`}
+              />
+            </Button>
+          </div>
           <div className="w-[250px] relative">
-            <Select defaultValue={selectedChannel?.storefront_url} onValueChange={handleChannelChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select" />
-                </SelectTrigger>
-                <SelectContent>
-                  {
-                    channels && channels?.length > 0 && channels?.map((channel) => (
-                      <SelectItem key={channel.channel_id} value={channel.storefront_url}>
-                        {channel.storefront_url}
-                      </SelectItem>
-                    ))
-                  }
-                </SelectContent>
-              </Select>
-              <div 
-                className="flex items-center gap-1 absolute -top-2 left-3 p-y-0.5 px-1 bg-white rounded">
-                  <span className="text-xs font-medium text-gray-600">Channel</span>
-                  <Link href={`${selectedChannel?.storefront_url}`} target="_blank" className="hover:text-gray-700">
-                    <SquareArrowOutUpRight className="w-3 h-3" />
-                  </Link>
-              </div>
-         </div>
+            <Select
+              defaultValue={selectedChannel?.storefront_url}
+              onValueChange={handleChannelChange}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {channels &&
+                  channels?.length > 0 &&
+                  channels?.map((channel) => (
+                    <SelectItem
+                      key={channel.channel_id}
+                      value={channel.storefront_url}
+                    >
+                      {channel.storefront_url}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-1 absolute -top-2 left-3 p-y-0.5 px-1 bg-white rounded">
+              <span className="text-xs font-medium text-gray-600">Channel</span>
+              <Link
+                href={`${selectedChannel?.storefront_url}`}
+                target="_blank"
+                className="hover:text-gray-700"
+              >
+                <SquareArrowOutUpRight className="w-3 h-3" />
+              </Link>
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -810,7 +871,7 @@ const BacklinkDashboard = () => {
                 defaultValue={sortBy}
                 onChange={(value: string) => dispatch(setSortBy(value))}
                 disabled={loading}
-                />
+              />
             </div>
           </div>
 
@@ -1182,7 +1243,7 @@ const BacklinkDashboard = () => {
                           </PaginationLink>
                         </PaginationItem>
                       );
-                    }
+                    },
                   )}
 
                   {pagination.totalPages > 5 &&

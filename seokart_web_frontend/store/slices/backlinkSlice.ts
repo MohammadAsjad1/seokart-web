@@ -221,6 +221,25 @@ export const refreshBacklinkData = createAsyncThunk(
   }
 );
 
+export const syncBacklinkData = createAsyncThunk(
+  "backlink/syncBacklinkData",
+  async ({ websiteUrl }: { websiteUrl: string } , { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get(`/backlinks/sync?websiteUrl=${websiteUrl}`);
+      if (!response.data.success) {
+        throw new Error(response.data.message || "Failed to sync data");
+      }
+      return response.data.data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message ||
+          error.message ||
+          "Failed to sync data"
+      );
+    }
+  }
+);
+
 const backlinkSlice = createSlice({
   name: "backlink",
   initialState,
@@ -322,6 +341,17 @@ const backlinkSlice = createSlice({
         state.error = null;
       })
       .addCase(refreshBacklinkData.rejected, (state, action) => {
+        state.processing = false;
+        state.error = action.payload as string;
+      })
+      .addCase(syncBacklinkData.pending, (state) => {
+        state.processing = true;
+        state.error = null;
+      })
+      .addCase(syncBacklinkData.fulfilled, (state) => {
+        state.error = null;
+      })
+      .addCase(syncBacklinkData.rejected, (state, action) => {
         state.processing = false;
         state.error = action.payload as string;
       });

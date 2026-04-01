@@ -3,10 +3,9 @@ const dotenv = require('dotenv');
 dotenv.config();
 const { connect } = require("./config/database");
 const rankTrackerScheduler = require('./utils/rankTrackerScheduler');
+const backlinkScheduler = require("./jobs/backlinkScheduler");
 const mongoose = require('mongoose');
 const PORT = process.env.PORT || 5000;
-const axios = require('axios');
-const https = require("https");
 const crashRecoveryService = require("./services/crash-recovery-service");
 const { scraperService } = require("./services/scraper-service");
 const logger = require("./config/logger");
@@ -20,6 +19,10 @@ async function startServer() {
     // Initialize rank tracker scheduler
     await rankTrackerScheduler.init();
     console.log("✅ Rank tracker scheduler initialized");
+
+    // Initialize backlink scheduler
+    await backlinkScheduler.init();
+    console.log("✅ Backlink scheduler initialized");
 
     // Start the server
     server.listen(PORT, '0.0.0.0',() => {
@@ -39,6 +42,11 @@ async function startServer() {
       if (rankTrackerScheduler.stop) {
         await rankTrackerScheduler.stop();
         console.log("✅ Rank tracker scheduler stopped");
+      }
+
+      if (backlinkScheduler.stop) {
+        await backlinkScheduler.stop();
+        console.log("✅ Backlink scheduler stopped");
       }
       
       server.close(() => {
