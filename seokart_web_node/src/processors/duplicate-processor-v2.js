@@ -9,12 +9,16 @@ const WORD_SHINGLE_SIZE = 6;
 const SIMHASH_BITS = 64;
 const JENKINS_SALT_HIGH = "\x01"; // salt for high 32 bits of 64-bit shingle hash
 
-const BANDS = 4;
-const BITS_PER_BAND = 16; 
+// const BANDS = 4;
+// const BITS_PER_BAND = 16;
+const BANDS = 8;
+const BITS_PER_BAND = 8;
 
 const STORE_MAX_TITLES = 200000;
 const STORE_MAX_DESCRIPTIONS = 200000;
 const STORE_MAX_BUCKET_ENTRIES = 1000000;
+const CONTENT_BUCKET_SAMPLE_SIZE =
+  Number(process.env.DUP_BUCKET_SAMPLE_SIZE) || 300;
 
 const REDIS_KEY_PREFIX = "dup";
 /** TTL for duplicate-store keys (seconds). Default 24h; set DUP_REDIS_TTL_SECONDS to override. */
@@ -66,7 +70,10 @@ class DuplicateProcessorV2 {
       hSet: (r.hSet ?? r.hset).bind(r),
       hLen: (r.hLen ?? r.hlen).bind(r),
       sAdd: (r.sAdd ?? r.sadd).bind(r),
+      sCard: (r.sCard ?? r.scard).bind(r),
+      sIsMember: (r.sIsMember ?? r.sismember).bind(r),
       sMembers: (r.sMembers ?? r.smembers).bind(r),
+      sRandMember: (r.sRandMember ?? r.srandmember).bind(r),
       get: r.get.bind(r),
       incrBy: (r.incrBy ?? r.incrby).bind(r),
       scan: r.scan.bind(r),
@@ -86,17 +93,51 @@ class DuplicateProcessorV2 {
     const r = store.redis;
     const usePipeline = typeof r.pipeline === "function";
     const multi = usePipeline ? r.pipeline() : r.multi?.();
-    if (!multi) return Promise.all(commands.map((c) => (r[c.cmd] ?? r[c.cmd?.toLowerCase()])?.(...c.args) ?? Promise.resolve(null)));
+    if (!multi)
+      return Promise.all(
+        commands.map(
+          (c) =>
+            (r[c.cmd] ?? r[c.cmd?.toLowerCase()])?.(...c.args) ??
+            Promise.resolve(null),
+        ),
+      );
     const cmdToMethod = usePipeline
-      ? { hGet: "hget", hSet: "hset", hLen: "hlen", get: "get", sAdd: "sadd", sMembers: "smembers", incrBy: "incrby", expire: "expire" }
-      : { hGet: "hGet", hSet: "hSet", hLen: "hLen", get: "get", sAdd: "sAdd", sMembers: "sMembers", incrBy: "incrBy", expire: "expire" };
+      ? {
+          hGet: "hget",
+          hSet: "hset",
+          hLen: "hlen",
+          get: "get",
+          sAdd: "sadd",
+          sCard: "scard",
+          sIsMember: "sismember",
+          sMembers: "smembers",
+          sRandMember: "srandmember",
+          incrBy: "incrby",
+          expire: "expire",
+        }
+      : {
+          hGet: "hGet",
+          hSet: "hSet",
+          hLen: "hLen",
+          get: "get",
+          sAdd: "sAdd",
+          sCard: "sCard",
+          sIsMember: "sIsMember",
+          sMembers: "sMembers",
+          sRandMember: "sRandMember",
+          incrBy: "incrBy",
+          expire: "expire",
+        };
     for (const { cmd, args } of commands) {
-      const method = cmdToMethod[cmd] ?? (usePipeline ? cmd.toLowerCase() : cmd);
+      const method =
+        cmdToMethod[cmd] ?? (usePipeline ? cmd.toLowerCase() : cmd);
       if (typeof multi[method] === "function") multi[method](...args);
     }
-    const results = await (multi.exec ? multi.exec() : multi.execAsync?.() ?? Promise.resolve([]));
+    const results = await (multi.exec
+      ? multi.exec()
+      : (multi.execAsync?.() ?? Promise.resolve([])));
     if (!Array.isArray(results)) return commands.map(() => null);
-    
+
     return results.map((res) => {
       // ioredis-style: [err, value]
       if (Array.isArray(res) && res.length === 2) {
@@ -124,86 +165,15 @@ class DuplicateProcessorV2 {
       const v = await redis.get(key);
       return v !== null && v !== undefined;
     } catch (err) {
-      logger.debug("isStoreInitialized check failed", { userActivityId, err: err?.message });
+      logger.debug("isStoreInitialized check failed", {
+        userActivityId,
+        err: err?.message,
+      });
       return false;
     }
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
-
-  /**
-   * TWO-PASS duplicate detection for chunked processing.
-   *
-   * Pass 1 — build a complete signatureStore across ALL chunks (no DB writes).
-   * Pass 2 — re-evaluate every chunk against the complete store and write scores.
-   *
-   * This ensures that a page in chunk 1 correctly detects a duplicate in chunk 5.
-   *
-   * @param {string}   userActivityId
-   * @param {string}   userId
-   * @param {number}   chunkSize
-   * @param {Function} getChunk(skip, limit) → Array<page>
-   * @param {Function} onChunkReady(chunk, duplicateResults) → Promise  (called in pass 2)
-   * @param {number}   totalCount
-   */
-  async runTwoPassAnalysis({
-    userActivityId,
-    userId,
-    chunkSize = 2000,
-    getChunk,
-    onChunkReady,
-    totalCount,
-  }) {
-    logger.info(
-      `Two-pass duplicate analysis: ${totalCount} pages, chunk=${chunkSize}`,
-      userId,
-    );
-
-    // ── Pass 1: build full store ─────────────────────────────────────────────
-    logger.info("Duplicate pass 1: building signature store...", userId);
-    let signatureStore = this._emptyStore(userActivityId);
-    await this._clearRedisStore(signatureStore);
-
-    for (let skip = 0; skip < totalCount; skip += chunkSize) {
-      try {
-        const chunk = await getChunk(skip, chunkSize);
-        if (!chunk.length) break;
-        const { updatedStore } = await this._buildStoreOnly(chunk, signatureStore);
-        signatureStore = updatedStore;
-        logger.debug(
-          `Pass 1 — indexed ${Math.min(skip + chunkSize, totalCount)}/${totalCount}`,
-          userId,
-        );
-      } catch (err) {
-        logger.error(`Pass 1 chunk at skip=${skip} failed`, err, userId);
-      }
-    }
-
-    // ── Pass 2: score against complete store ─────────────────────────────────
-    logger.info("Duplicate pass 2: scoring against complete store...", userId);
-
-    for (let skip = 0; skip < totalCount; skip += chunkSize) {
-      try {
-        const chunk = await getChunk(skip, chunkSize);
-        if (!chunk.length) break;
-
-        const { duplicateResults } = await this.findDuplicatesWithStore(
-          chunk,
-          signatureStore,
-        );
-        await onChunkReady(chunk, duplicateResults);
-
-        logger.debug(
-          `Pass 2 — scored ${Math.min(skip + chunkSize, totalCount)}/${totalCount}`,
-          userId,
-        );
-      } catch (err) {
-        logger.error(`Pass 2 chunk at skip=${skip} failed`, err, userId);
-      }
-    }
-
-    logger.info("Two-pass duplicate analysis complete", userId);
-  }
 
   /**
    * Incremental duplicate detection (single pass).
@@ -218,7 +188,8 @@ class DuplicateProcessorV2 {
     const store = signatureStore || this._emptyStore(null);
     const duplicateResults = new Map();
     const redis = this._redis(store);
-    const prefix = store.userActivityId != null ? this._prefix(store.userActivityId) : null;
+    const prefix =
+      store.userActivityId != null ? this._prefix(store.userActivityId) : null;
 
     for (const page of batch) {
       try {
@@ -230,32 +201,95 @@ class DuplicateProcessorV2 {
         };
 
         if (page.canonicalUrl && page.canonicalUrl !== page.pageUrl) {
-          duplicateResults.set(idStr, { ...duplicates, skippedReason: "has_canonical" });
+          duplicateResults.set(idStr, {
+            ...duplicates,
+            skippedReason: "has_canonical",
+          });
           continue;
         }
 
         // --- Title & Description Normalization ---
-        const titleNorm = page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
-        const descNorm = page.metaDescription?.trim().length > 10 ? this.normalizeDescription(page.metaDescription) : "";
+        const titleNorm =
+          page.title?.trim().length > 5 ? this.normalizeTitle(page.title) : "";
+        const descNorm =
+          page.metaDescription?.trim().length > 10
+            ? this.normalizeDescription(page.metaDescription)
+            : "";
 
-        let titleExisting = [], titleCount = 0;
-        let descExisting = [], descCount = 0;
+        let titleExisting = [],
+          titleCount = 0,
+          titleNormExists = false;
+        let descExisting = [],
+          descCount = 0,
+          descNormExists = false;
         const pageWriteCmds = [];
 
         if (redis) {
           const readCmds = [
-            { cmd: "hGet", args: [prefix + "titles", titleNorm] },
-            { cmd: "hLen", args: [prefix + "titles"] },
-            { cmd: "hGet", args: [prefix + "descriptions", descNorm] },
-            { cmd: "hLen", args: [prefix + "descriptions"] },
+            { cmd: "sCard", args: [prefix + "title_norms"] },
+            { cmd: "sCard", args: [prefix + "description_norms"] },
           ];
+          let titleExistsIdx = -1;
+          let descExistsIdx = -1;
+          let titleMembersIdx = -1;
+          let descMembersIdx = -1;
+          if (titleNorm) {
+            titleExistsIdx =
+              readCmds.push({
+                cmd: "sIsMember",
+                args: [prefix + "title_norms", titleNorm],
+              }) - 1;
+            titleMembersIdx =
+              readCmds.push({
+                cmd: "sRandMember",
+                args: [prefix + "t:" + titleNorm, CONTENT_BUCKET_SAMPLE_SIZE],
+              }) - 1;
+          }
+          if (descNorm) {
+            descExistsIdx =
+              readCmds.push({
+                cmd: "sIsMember",
+                args: [prefix + "description_norms", descNorm],
+              }) - 1;
+            descMembersIdx =
+              readCmds.push({
+                cmd: "sRandMember",
+                args: [prefix + "d:" + descNorm, CONTENT_BUCKET_SAMPLE_SIZE],
+              }) - 1;
+          }
           const readResults = await this._execPipeline(store, readCmds);
-          
-          if (readResults[0]) try { titleExisting = JSON.parse(readResults[0]); } catch (_) {}
-          titleCount = Number(readResults[1] || 0);
-          
-          if (readResults[2]) try { descExisting = JSON.parse(readResults[2]); } catch (_) {}
-          descCount = Number(readResults[3] || 0);
+
+          titleCount = Number(readResults[0] || 0);
+          descCount = Number(readResults[1] || 0);
+          if (titleExistsIdx !== -1)
+            titleNormExists = Number(readResults[titleExistsIdx] || 0) === 1;
+          if (descExistsIdx !== -1)
+            descNormExists = Number(readResults[descExistsIdx] || 0) === 1;
+
+          const titleMembers =
+            titleMembersIdx === -1 ? [] : readResults[titleMembersIdx];
+          const titleRows = Array.isArray(titleMembers)
+            ? titleMembers
+            : titleMembers
+              ? [titleMembers]
+              : [];
+          for (const m of titleRows) {
+            try {
+              titleExisting.push(JSON.parse(m));
+            } catch (_) {}
+          }
+          const descMembers =
+            descMembersIdx === -1 ? [] : readResults[descMembersIdx];
+          const descRows = Array.isArray(descMembers)
+            ? descMembers
+            : descMembers
+              ? [descMembers]
+              : [];
+          for (const m of descRows) {
+            try {
+              descExisting.push(JSON.parse(m));
+            } catch (_) {}
+          }
         } else {
           if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
           titleCount = store.titles.size;
@@ -265,27 +299,111 @@ class DuplicateProcessorV2 {
 
         // --- 1. Title Match ---
         if (titleNorm) {
-          const others = titleExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
+          const others = titleExisting.filter(
+            (e) => (e._id || e._idStr)?.toString() !== idStr,
+          );
           if (others.length > 0) {
-            duplicates.titleDuplicates = others.map(e => ({ pageUrl: e.pageUrl, title: e.title || "", duplicateType: "exact_match", similarity: 1.0 }));
-            this.stats.titleDuplicatesFound += duplicates.titleDuplicates.length;
+            duplicates.titleDuplicates = others.map((e) => ({
+              pageUrl: e.pageUrl,
+              title: e.title || "",
+              duplicateType: "exact_match",
+              similarity: 1.0,
+            }));
+            this.stats.titleDuplicatesFound +=
+              duplicates.titleDuplicates.length;
           }
-          if (titleCount < STORE_MAX_TITLES) {
-            titleExisting.push({ _id: idStr, pageUrl: page.pageUrl, title: page.title || "" });
+          const canStoreTitle = !redis
+            ? titleCount < STORE_MAX_TITLES
+            : titleNormExists || titleCount < STORE_MAX_TITLES;
+          if (canStoreTitle) {
+            titleExisting.push({
+              _id: idStr,
+              pageUrl: page.pageUrl,
+              title: page.title || "",
+            });
             if (!redis) store.titles.set(titleNorm, titleExisting);
+            else {
+              if (!titleNormExists) {
+                pageWriteCmds.push({
+                  cmd: "sAdd",
+                  args: [prefix + "title_norms", titleNorm],
+                });
+              }
+              pageWriteCmds.push({
+                cmd: "sAdd",
+                args: [
+                  prefix + "t:" + titleNorm,
+                  JSON.stringify({
+                    _id: idStr,
+                    pageUrl: page.pageUrl,
+                    title: page.title || "",
+                  }),
+                ],
+              });
+              pageWriteCmds.push({
+                cmd: "expire",
+                args: [prefix + "title_norms", REDIS_TTL_SECONDS],
+              });
+              pageWriteCmds.push({
+                cmd: "expire",
+                args: [prefix + "t:" + titleNorm, REDIS_TTL_SECONDS],
+              });
+            }
           }
         }
 
         // --- 2. Meta Description Match ---
         if (descNorm) {
-          const others = descExisting.filter((e) => (e._id || e._idStr)?.toString() !== idStr);
+          const others = descExisting.filter(
+            (e) => (e._id || e._idStr)?.toString() !== idStr,
+          );
           if (others.length > 0) {
-            duplicates.descriptionDuplicates = others.map(e => ({ pageUrl: e.pageUrl, description: e.metaDescription || e.description || "", duplicateType: "exact_match", similarity: 1.0 }));
-            this.stats.descriptionDuplicatesFound += duplicates.descriptionDuplicates.length;
+            duplicates.descriptionDuplicates = others.map((e) => ({
+              pageUrl: e.pageUrl,
+              description: e.metaDescription || e.description || "",
+              duplicateType: "exact_match",
+              similarity: 1.0,
+            }));
+            this.stats.descriptionDuplicatesFound +=
+              duplicates.descriptionDuplicates.length;
           }
-          if (descCount < STORE_MAX_DESCRIPTIONS) {
-            descExisting.push({ _id: idStr, pageUrl: page.pageUrl, metaDescription: page.metaDescription || "" });
+          const canStoreDesc = !redis
+            ? descCount < STORE_MAX_DESCRIPTIONS
+            : descNormExists || descCount < STORE_MAX_DESCRIPTIONS;
+          if (canStoreDesc) {
+            descExisting.push({
+              _id: idStr,
+              pageUrl: page.pageUrl,
+              metaDescription: page.metaDescription || "",
+            });
             if (!redis) store.descriptions.set(descNorm, descExisting);
+            else {
+              if (!descNormExists) {
+                pageWriteCmds.push({
+                  cmd: "sAdd",
+                  args: [prefix + "description_norms", descNorm],
+                });
+              }
+              pageWriteCmds.push({
+                cmd: "sAdd",
+                args: [
+                  prefix + "d:" + descNorm,
+                  JSON.stringify({
+                    _id: idStr,
+                    pageUrl: page.pageUrl,
+                    metaDescription: page.metaDescription || "",
+                  }),
+                ],
+              });
+              pageWriteCmds.push({
+                cmd: "expire",
+                args: [prefix + "description_norms", REDIS_TTL_SECONDS],
+              });
+              pageWriteCmds.push({
+                cmd: "expire",
+                args: [prefix + "d:" + descNorm, REDIS_TTL_SECONDS],
+              });
+            }
           }
         }
 
@@ -304,9 +422,15 @@ class DuplicateProcessorV2 {
             if (redis) {
               const contentReadCmds = [
                 { cmd: "get", args: [prefix + "bucket_count"] },
-                ...bucketKeys.map((key) => ({ cmd: "sMembers", args: [prefix + "b:" + key] })),
+                ...bucketKeys.map((key) => ({
+                  cmd: "sRandMember",
+                  args: [prefix + "b:" + key, CONTENT_BUCKET_SAMPLE_SIZE],
+                })),
               ];
-              const contentReadResults = await this._execPipeline(store, contentReadCmds);
+              const contentReadResults = await this._execPipeline(
+                store,
+                contentReadCmds,
+              );
               bucketCount = parseInt(contentReadResults[0] || "0", 10);
               // SLICE FIX: Take 1 (count) + 4 (keys) = indices 1 to 4
               contentBucketMembers = contentReadResults.slice(1, 1 + BANDS);
@@ -316,14 +440,14 @@ class DuplicateProcessorV2 {
             for (let i = 0; i < bucketKeys.length; i++) {
               let bucket = [];
               if (redis && contentBucketMembers?.[i]) {
-                const members = contentBucketMembers[i];
-                if (Array.isArray(members)) {
-                  for (const m of members) {
-                    try {
-                      const o = JSON.parse(m);
-                      bucket.push({ ...o, simhash: BigInt(o.simhash) });
-                    } catch (_) {}
-                  }
+                const members = Array.isArray(contentBucketMembers[i])
+                  ? contentBucketMembers[i]
+                  : [contentBucketMembers[i]];
+                for (const m of members) {
+                  try {
+                    const o = JSON.parse(m);
+                    bucket.push({ ...o, simhash: BigInt(o.simhash) });
+                  } catch (_) {}
                 }
               } else if (!redis) {
                 bucket = store.contentSimhashBuckets.get(bucketKeys[i]) || [];
@@ -336,7 +460,9 @@ class DuplicateProcessorV2 {
 
                 const dist = this.hammingDistance64(simhash, entry.simhash);
                 if (dist <= SIMHASH_HAMMING_THRESHOLD) {
-                  const similarity = parseFloat((1 - dist / SIMHASH_BITS).toFixed(3));
+                  const similarity = parseFloat(
+                    (1 - dist / SIMHASH_BITS).toFixed(3),
+                  );
                   duplicates.contentDuplicates.push({
                     pageUrl: entry.pageUrl,
                     wordCount: entry.wordCount || 0,
@@ -358,14 +484,32 @@ class DuplicateProcessorV2 {
               });
               if (redis) {
                 for (const key of bucketKeys) {
-                  pageWriteCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
-                  pageWriteCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
+                  pageWriteCmds.push({
+                    cmd: "sAdd",
+                    args: [prefix + "b:" + key, entryPayload],
+                  });
+                  pageWriteCmds.push({
+                    cmd: "expire",
+                    args: [prefix + "b:" + key, REDIS_TTL_SECONDS],
+                  });
                 }
-                pageWriteCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", BANDS] });
+                pageWriteCmds.push({
+                  cmd: "incrBy",
+                  args: [prefix + "bucket_count", BANDS],
+                });
+                pageWriteCmds.push({
+                  cmd: "expire",
+                  args: [prefix + "bucket_count", REDIS_TTL_SECONDS],
+                });
               } else {
                 for (const key of bucketKeys) {
                   let b = store.contentSimhashBuckets.get(key) || [];
-                  b.push({ simhash, _id: idStr, pageUrl: page.pageUrl, wordCount: page.wordCount || 0 });
+                  b.push({
+                    simhash,
+                    _id: idStr,
+                    pageUrl: page.pageUrl,
+                    wordCount: page.wordCount || 0,
+                  });
                   store.contentSimhashBuckets.set(key, b);
                   store.totalBucketEntries++;
                 }
@@ -376,15 +520,8 @@ class DuplicateProcessorV2 {
 
         // --- Finalize Redis Writes ---
         if (redis) {
-          if (titleNorm && titleCount < STORE_MAX_TITLES) {
-            pageWriteCmds.push({ cmd: "hSet", args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)] });
-            pageWriteCmds.push({ cmd: "expire", args: [prefix + "titles", REDIS_TTL_SECONDS] });
-          }
-          if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
-            pageWriteCmds.push({ cmd: "hSet", args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)] });
-            pageWriteCmds.push({ cmd: "expire", args: [prefix + "descriptions", REDIS_TTL_SECONDS] });
-          }
-          if (pageWriteCmds.length) await this._execPipeline(store, pageWriteCmds);
+          if (pageWriteCmds.length)
+            await this._execPipeline(store, pageWriteCmds);
         }
 
         this.stats.webpagesAnalyzed++;
@@ -445,7 +582,9 @@ class DuplicateProcessorV2 {
     }
     try {
       const $ = cheerio.load(trimmed);
-      $("nav, footer, header, aside, script, style, noscript, iframe, svg, form, button").remove();
+      $(
+        "nav, footer, header, aside, script, style, noscript, iframe, svg, form, button",
+      ).remove();
       const text = $("body").length ? $("body").text() : $.text();
       return this.normalizeContent(text);
     } catch {
@@ -513,11 +652,10 @@ class DuplicateProcessorV2 {
       return (BigInt(high) << 32n) | BigInt(low);
     });
     const unique = [...new Set(hashes)];
-    // const selected = unique;
-    const selected = 
-      unique.length > SIMHASH_MAX_FEATURES
-        ? unique.slice(0, SIMHASH_MAX_FEATURES)
-        : unique;
+    const selected = unique;
+    // unique.length > SIMHASH_MAX_FEATURES
+    //   ? unique.slice(0, SIMHASH_MAX_FEATURES)
+    //   : unique;
 
     let simhash = 0n;
     for (let pos = 0; pos < SIMHASH_BITS; pos++) {
@@ -531,17 +669,13 @@ class DuplicateProcessorV2 {
     return simhash;
   }
 
-  // 4 bands of 16 bits each for 64-bit SimHash LSH bucketing.
-  // Keys are bandIndex * 65536 + value so bands do not collide.
-  // @param {bigint} hash64
-  // @returns {number[]} 4 bucket keys
   getContentSimhashBucketKeys(hash64) {
     const keys = [];
     for (let band = 0; band < BANDS; band++) {
       const shift = BigInt(band * BITS_PER_BAND);
       // 0xffff is the mask for 16 bits (65535 in decimal)
       const value = Number((hash64 >> shift) & 0xffffn);
-      
+
       // Offset each band so keys from Band 0 don't collide with Band 1
       // Band 0: 0-65535, Band 1: 65536-131071, etc.
       keys.push(band * 65536 + value);
@@ -653,68 +787,74 @@ class DuplicateProcessorV2 {
             : "";
 
         let titleCount = 0;
-        let titleExisting = [];
+        let titleNormExists = false;
         let descCount = 0;
-        let descExisting = [];
+        let descNormExists = false;
         let bucketCount = 0;
 
         if (redis) {
           const readCmds = [
-            { cmd: "hLen", args: [prefix + "titles"] },
-            { cmd: "hGet", args: [prefix + "titles", titleNorm] },
-            { cmd: "hLen", args: [prefix + "descriptions"] },
-            { cmd: "hGet", args: [prefix + "descriptions", descNorm] },
+            { cmd: "sCard", args: [prefix + "title_norms"] },
+            { cmd: "sCard", args: [prefix + "description_norms"] },
             { cmd: "get", args: [prefix + "bucket_count"] },
           ];
+          let titleExistsIdx = -1;
+          let descExistsIdx = -1;
+          if (titleNorm) {
+            titleExistsIdx =
+              readCmds.push({
+                cmd: "sIsMember",
+                args: [prefix + "title_norms", titleNorm],
+              }) - 1;
+          }
+          if (descNorm) {
+            descExistsIdx =
+              readCmds.push({
+                cmd: "sIsMember",
+                args: [prefix + "description_norms", descNorm],
+              }) - 1;
+          }
           const readResults = await this._execPipeline(store, readCmds);
           titleCount = readResults[0] != null ? Number(readResults[0]) : 0;
-          const titleRaw = readResults[1];
-          if (titleRaw != null && titleRaw !== "") {
-            try {
-              titleExisting = JSON.parse(titleRaw);
-            } catch (_) {
-              titleExisting = [];
-            }
-          }
-          descCount = readResults[2] != null ? Number(readResults[2]) : 0;
-          const descRaw = readResults[3];
-          if (descRaw != null && descRaw !== "") {
-            try {
-              descExisting = JSON.parse(descRaw);
-            } catch (_) {
-              descExisting = [];
-            }
-          }
-          bucketCount = parseInt(readResults[4] || "0", 10);
+          descCount = readResults[1] != null ? Number(readResults[1]) : 0;
+          if (titleExistsIdx !== -1)
+            titleNormExists = Number(readResults[titleExistsIdx] || 0) === 1;
+          if (descExistsIdx !== -1)
+            descNormExists = Number(readResults[descExistsIdx] || 0) === 1;
+          bucketCount = parseInt(readResults[2] || "0", 10);
         } else {
           titleCount = store.titles.size;
-          if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
+          const titleExisting = titleNorm
+            ? store.titles.get(titleNorm) || []
+            : [];
           descCount = store.descriptions.size;
-          if (descNorm) descExisting = store.descriptions.get(descNorm) || [];
+          const descExisting = descNorm
+            ? store.descriptions.get(descNorm) || []
+            : [];
           bucketCount = store.totalBucketEntries;
-        }
-
-        if (titleNorm && titleCount < STORE_MAX_TITLES) {
-          titleExisting.push({ _id: page._id.toString(), pageUrl: page.pageUrl, title: page.title || "" });
-          if (!redis) store.titles.set(titleNorm, titleExisting);
-        }
-        if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
-          descExisting.push({
-            _id: page._id.toString(),
-            pageUrl: page.pageUrl,
-            metaDescription: page.metaDescription || "",
-          });
-          if (!redis) store.descriptions.set(descNorm, descExisting);
+          if (titleNorm && titleCount < STORE_MAX_TITLES) {
+            titleExisting.push({
+              _id: page._id.toString(),
+              pageUrl: page.pageUrl,
+              title: page.title || "",
+            });
+            store.titles.set(titleNorm, titleExisting);
+          }
+          if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
+            descExisting.push({
+              _id: page._id.toString(),
+              pageUrl: page.pageUrl,
+              metaDescription: page.metaDescription || "",
+            });
+            store.descriptions.set(descNorm, descExisting);
+          }
         }
 
         if (page.content?.trim().length > 100) {
           const cleanText = this.extractCleanTextFromHtml(page.content);
           const shingles = this.getWordShingles(cleanText, WORD_SHINGLE_SIZE);
 
-          if (
-            shingles.length > 0 &&
-            bucketCount < STORE_MAX_BUCKET_ENTRIES
-          ) {
+          if (shingles.length > 0 && bucketCount < STORE_MAX_BUCKET_ENTRIES) {
             const simhash = this.simhashFromWordShingles(shingles);
             const bucketKeys = this.getContentSimhashBucketKeys(simhash);
             const entryPayload = JSON.stringify({
@@ -727,11 +867,23 @@ class DuplicateProcessorV2 {
             if (redis) {
               const writeCmds = [];
               for (const key of bucketKeys) {
-                writeCmds.push({ cmd: "sAdd", args: [prefix + "b:" + key, entryPayload] });
-                writeCmds.push({ cmd: "expire", args: [prefix + "b:" + key, REDIS_TTL_SECONDS] });
+                writeCmds.push({
+                  cmd: "sAdd",
+                  args: [prefix + "b:" + key, entryPayload],
+                });
+                writeCmds.push({
+                  cmd: "expire",
+                  args: [prefix + "b:" + key, REDIS_TTL_SECONDS],
+                });
               }
-              writeCmds.push({ cmd: "incrBy", args: [prefix + "bucket_count", BANDS] });
-              writeCmds.push({ cmd: "expire", args: [prefix + "bucket_count", REDIS_TTL_SECONDS] });
+              writeCmds.push({
+                cmd: "incrBy",
+                args: [prefix + "bucket_count", BANDS],
+              });
+              writeCmds.push({
+                cmd: "expire",
+                args: [prefix + "bucket_count", REDIS_TTL_SECONDS],
+              });
               await this._execPipeline(store, writeCmds);
             } else {
               const entry = {
@@ -755,19 +907,62 @@ class DuplicateProcessorV2 {
 
         if (redis) {
           const writeCmds = [];
-          if (titleNorm && titleCount < STORE_MAX_TITLES) {
+          if (titleNorm && (titleNormExists || titleCount < STORE_MAX_TITLES)) {
+            if (!titleNormExists) {
+              writeCmds.push({
+                cmd: "sAdd",
+                args: [prefix + "title_norms", titleNorm],
+              });
+            }
             writeCmds.push({
-              cmd: "hSet",
-              args: [prefix + "titles", titleNorm, JSON.stringify(titleExisting)],
+              cmd: "sAdd",
+              args: [
+                prefix + "t:" + titleNorm,
+                JSON.stringify({
+                  _id: page._id.toString(),
+                  pageUrl: page.pageUrl,
+                  title: page.title || "",
+                }),
+              ],
             });
-            writeCmds.push({ cmd: "expire", args: [prefix + "titles", REDIS_TTL_SECONDS] });
+            writeCmds.push({
+              cmd: "expire",
+              args: [prefix + "title_norms", REDIS_TTL_SECONDS],
+            });
+            writeCmds.push({
+              cmd: "expire",
+              args: [prefix + "t:" + titleNorm, REDIS_TTL_SECONDS],
+            });
           }
-          if (descNorm && descCount < STORE_MAX_DESCRIPTIONS) {
+          if (
+            descNorm &&
+            (descNormExists || descCount < STORE_MAX_DESCRIPTIONS)
+          ) {
+            if (!descNormExists) {
+              writeCmds.push({
+                cmd: "sAdd",
+                args: [prefix + "description_norms", descNorm],
+              });
+            }
             writeCmds.push({
-              cmd: "hSet",
-              args: [prefix + "descriptions", descNorm, JSON.stringify(descExisting)],
+              cmd: "sAdd",
+              args: [
+                prefix + "d:" + descNorm,
+                JSON.stringify({
+                  _id: page._id.toString(),
+                  pageUrl: page.pageUrl,
+                  metaDescription: page.metaDescription || "",
+                }),
+              ],
             });
-            writeCmds.push({ cmd: "expire", args: [prefix + "descriptions", REDIS_TTL_SECONDS] });
+            writeCmds.push({
+              cmd: "expire",
+              args: [prefix + "description_norms", REDIS_TTL_SECONDS],
+            });
+            writeCmds.push({
+              cmd: "expire",
+              args: [prefix + "d:" + descNorm, REDIS_TTL_SECONDS],
+            });
           }
           if (writeCmds.length) await this._execPipeline(store, writeCmds);
         }
