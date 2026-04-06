@@ -326,25 +326,25 @@ class SlowAnalyzerJobV2 {
       );
 
       // Get all relevant WebpageCores for _id/analysisId mapping.
-      const webpageCores = await WebpageCore.find(
-        {
-          _id: { $in: updates.map((u) => u._id) },
-          analysisId: { $exists: true, $ne: null },
-        },
-        { _id: 1, analysisId: 1 },
-      ).lean();
+      // const webpageCores = await WebpageCore.find(
+      //   {
+      //     _id: { $in: updates.map((u) => u._id) },
+      //     analysisId: { $exists: true, $ne: null },
+      //   },
+      //   { _id: 1, analysisId: 1 },
+      // ).lean();
 
-      if (!webpageCores.length) return;
+      // if (!webpageCores.length) return;
 
       // Prepare a single bulkWrite operation for all analysis updates
       const analysisBulkOps = [];
-      for (const { _id, analysisId } of webpageCores) {
+      for (const { _id } of updates) {
         const updatePayload = updateMap.get(String(_id));
-        if (!updatePayload || !analysisId) continue;
+        if (!updatePayload || !_id) continue;
         const { duplicates = {}, duplicateScore = 100 } = updatePayload;
         analysisBulkOps.push({
           updateOne: {
-            filter: { _id: analysisId },
+            filter: { webpageCoreId: _id },
             update: {
               $set: {
                 "duplicates.titleDuplicates": duplicates.titleDuplicates || [],
@@ -453,7 +453,8 @@ class SlowAnalyzerJobV2 {
         let chunkCount = 0;
 
         if (!signatureStore) {
-          signatureStore = this.duplicateProcessorV2._emptyStore(userActivityId);
+          signatureStore =
+            this.duplicateProcessorV2._emptyStore(userActivityId);
           if (this.duplicateProcessorV2.redis) {
             await this.duplicateProcessorV2._clearRedisStore(signatureStore);
           }
@@ -468,10 +469,11 @@ class SlowAnalyzerJobV2 {
           if (!chunk.length) break;
 
           try {
-            const { updatedStore } = await this.duplicateProcessorV2._buildStoreOnly(
-              chunk,
-              signatureStore,
-            );
+            const { updatedStore } =
+              await this.duplicateProcessorV2._buildStoreOnly(
+                chunk,
+                signatureStore,
+              );
             signatureStore = updatedStore;
           } catch (err) {
             logger.error("Pass 1: _buildStoreOnly failed for chunk", {
@@ -565,7 +567,14 @@ class SlowAnalyzerJobV2 {
 
           // Send in dbBatchSize-sized bulkWrite operations
           for (const batch of this.batchArray(updates, dbBatchSize)) {
-            await this.withRetry(() => this.bulkWriteDuplicateResults(batch));
+            this.bulkWriteDuplicateResults(batch).catch((err) => {
+              logger.error("Bulk write duplicate results failed for chunk", {
+                userId,
+                chunkCount,
+                batchSize: batch.length,
+                err,
+              });
+            });
             logger.info("Bulk write duplicate results for chunk", {
               userId,
               chunkCount,
@@ -585,7 +594,9 @@ class SlowAnalyzerJobV2 {
         try {
           await Promise.allSettled([
             this.runGrammarCheckChunk(chunk, userId, userActivityId),
-            this.validateLinksChunk(chunk, userId, userActivityId, totalCount, { activityId: userActivityId }),
+            this.validateLinksChunk(chunk, userId, userActivityId, totalCount, {
+              activityId: userActivityId,
+            }),
           ]);
           await this.recalculateScoresChunk(chunk, userId, userActivityId);
         } catch (err) {
@@ -612,10 +623,10 @@ class SlowAnalyzerJobV2 {
         const progress = Math.min(
           this.PROGRESS_END,
           this.PROGRESS_START +
-          Math.round(
-            ((this.PROGRESS_END - this.PROGRESS_START) * processed) /
-            totalCount,
-          ),
+            Math.round(
+              ((this.PROGRESS_END - this.PROGRESS_START) * processed) /
+                totalCount,
+            ),
         );
         await this.activityService.updateProgress(userActivityId, { progress });
 
@@ -657,6 +668,29 @@ class SlowAnalyzerJobV2 {
     }
   }
 
+  async getCompleteWebpageContentDataBatch(webpageIds) {
+    if (!Array.isArray(webpageIds) || webpageIds.length === 0) {
+      return new Map();
+    }
+    try {
+      const webpageContents = await WebpageContent.find({
+        webpageCoreId: { $in: webpageIds },
+      }).lean();
+      return new Map(
+        webpageContents.map((content) => [
+          content.webpageCoreId.toString(),
+          content,
+        ]),
+      );
+    } catch (error) {
+      logger.error(
+        "Error fetching complete webpage content data batch:",
+        error,
+      );
+      return new Map();
+    }
+  }
+
   /**
    * Run grammar/spell check on a chunk of webpages and persist to WebpageAnalysis.contentQuality.
    * Used in Crawl V2 when Phase1 skips grammar (processUrlFast).
@@ -664,62 +698,155 @@ class SlowAnalyzerJobV2 {
   async runGrammarCheckChunk(chunk, userId, userActivityId) {
     const concurrency = Math.min(config.concurrency.slow_analyzer || 8, 15);
     const limit = this.createConcurrencyLimiter(concurrency);
-    await Promise.all(
-      chunk.map((webpage) =>
-        limit(async () => {
-          const completeWebpage = await this.getCompleteWebpageData(
-            webpage._id,
-          );
-          if (!completeWebpage) return;
-          const content =
-            completeWebpage.content &&
-              typeof completeWebpage.content === "object" &&
-              completeWebpage.content.content
-              ? completeWebpage.content.content
-              : typeof completeWebpage.content === "string"
-                ? completeWebpage.content
-                : "";
-          const title = completeWebpage.title ?? "";
-          const metaDescription = completeWebpage.metaDescription ?? "";
-          const grammarResult = await this.grammarChecker.checkContent(
-            content,
-            title,
-            metaDescription,
-          );
-          await this.updateWebpageWithGrammar(webpage._id, grammarResult);
+    const batchSize = config.batch_sizes.grammar_check || 50;
+
+    for (let i = 0; i < chunk.length; i += batchSize) {
+      const batch = chunk.slice(i, i + batchSize);
+      const completeWebpageContentData =
+        await this.getCompleteWebpageContentDataBatch(batch.map((w) => w._id));
+      const results = await Promise.allSettled(
+        batch.map((webpage) =>
+          limit(async () => {
+            const completeWebpageContent = completeWebpageContentData.get(
+              webpage._id.toString(),
+            );
+            if (!completeWebpageContent) return;
+            const content = completeWebpageContent.content;
+            const title = completeWebpageContent.title;
+            const metaDescription = completeWebpageContent.metaDescription;
+            const grammarResult = await this.grammarChecker.checkContent(
+              content,
+              title,
+              metaDescription,
+            );
+            return { webpageCoreId: webpage._id, grammarResult };
+          }),
+        ),
+      );
+
+      results.forEach((r) => {
+        if (r.status === "rejected") {
+          logger.error("Grammar check failed", {
+            userId,
+            userActivityId,
+            webpageCoreId: r.value.webpageCoreId,
+            error: r.reason,
+          });
+        }
+      });
+
+      const updates = results
+        .filter((r) => r.status === "fulfilled" && r.value != null)
+        .map((r) => r.value);
+
+      if (updates.length > 0) {
+        await this.updateWebpageWithGrammarBulk(updates);
+      }
+    }
+
+    // await Promise.all(
+    //   chunk.map((webpage) =>
+    //     limit(async () => {
+    //       const completeWebpage = await this.getCompleteWebpageData(
+    //         webpage._id,
+    //       );
+    //       if (!completeWebpage) return;
+    //       const content =
+    //         completeWebpage.content &&
+    //           typeof completeWebpage.content === "object" &&
+    //           completeWebpage.content.content
+    //           ? completeWebpage.content.content
+    //           : typeof completeWebpage.content === "string"
+    //             ? completeWebpage.content
+    //             : "";
+    //       const title = completeWebpage.title ?? "";
+    //       const metaDescription = completeWebpage.metaDescription ?? "";
+    //       const grammarResult = await this.grammarChecker.checkContent(
+    //         content,
+    //         title,
+    //         metaDescription,
+    //       );
+    //       await this.updateWebpageWithGrammar(webpage._id, grammarResult);
+    //     }),
+    //   ),
+    // );
+  }
+
+  async updateWebpageWithGrammarBulk(updates) {
+    if (!updates?.length) return;
+    try {
+      await WebpageAnalysis.bulkWrite(
+        updates.map(({ webpageCoreId, grammarResult }) => {
+          const spellingErrors = grammarResult?.spellingErrors || [];
+          const grammarErrors = grammarResult?.grammarErrors || [];
+          const totalLanguageErrors =
+            spellingErrors.length + grammarErrors.length;
+          return {
+            updateOne: {
+              filter: { webpageCoreId },
+              update: {
+                $set: {
+                  "contentQuality.spellingErrors": spellingErrors,
+                  "contentQuality.spellingErrorsCount": spellingErrors.length,
+                  "contentQuality.grammarErrors": grammarErrors,
+                  "contentQuality.grammarErrorsCount": grammarErrors.length,
+                  "contentQuality.totalLanguageErrors": totalLanguageErrors,
+                  updatedAt: new Date(),
+                },
+              },
+            },
+          };
         }),
-      ),
-    );
+        { ordered: false },
+      );
+    } catch (error) {
+      logger.error("Error updating grammar for bulk webpages", error);
+    }
   }
 
   async updateWebpageWithGrammar(webpageId, grammarResult) {
     try {
-      const webpageCore = await WebpageCore.findById(webpageId).lean();
-      if (!webpageCore || !webpageCore.analysisId) return;
+      // const webpageCore = await WebpageCore.findById(webpageId).lean();
+      // if (!webpageCore || !webpageCore.analysisId) return;
       const spellingErrors = grammarResult.spellingErrors || [];
       const grammarErrors = grammarResult.grammarErrors || [];
       const totalLanguageErrors = spellingErrors.length + grammarErrors.length;
-      await WebpageAnalysis.findByIdAndUpdate(webpageCore.analysisId, {
-        "contentQuality.spellingErrors": spellingErrors,
-        "contentQuality.spellingErrorsCount": spellingErrors.length,
-        "contentQuality.grammarErrors": grammarErrors,
-        "contentQuality.grammarErrorsCount": grammarErrors.length,
-        "contentQuality.totalLanguageErrors": totalLanguageErrors,
-        updatedAt: new Date(),
-      });
+      // await WebpageAnalysis.findByIdAndUpdate(webpageCore.analysisId, {
+      await WebpageAnalysis.findOneAndUpdate(
+        { webpageCoreId: webpageId },
+        {
+          $set: {
+            "contentQuality.spellingErrors": spellingErrors,
+            "contentQuality.spellingErrorsCount": spellingErrors.length,
+            "contentQuality.grammarErrors": grammarErrors,
+            "contentQuality.grammarErrorsCount": grammarErrors.length,
+            "contentQuality.totalLanguageErrors": totalLanguageErrors,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true },
+      );
     } catch (error) {
       logger.error(`Error updating grammar for webpage ${webpageId}`, error);
     }
   }
 
-  async validateLinksChunk(chunk, userId, userActivityId, totalCount, chunkOptions = {}) {
+  async validateLinksChunk(
+    chunk,
+    userId,
+    userActivityId,
+    totalCount,
+    chunkOptions = {},
+  ) {
     const batchSize = config.batch_sizes.link_validation || 30;
     const concurrency =
       config.concurrency.link_validation ||
       config.concurrency.slow_analyzer ||
       5;
     const limit = this.createConcurrencyLimiter(concurrency);
-    const linkOptions = { activityId: chunkOptions.activityId ?? userActivityId };
+    const linkOptions = {
+      activityId: chunkOptions.activityId ?? userActivityId,
+    };
     for (let i = 0; i < chunk.length; i += batchSize) {
       const batch = chunk.slice(i, i + batchSize);
       const completeMap = await this.getCompleteWebpageDataBatch(
@@ -738,8 +865,10 @@ class SlowAnalyzerJobV2 {
             if (!completeWebpage) {
               return { webpageId: webpage._id, linkResults: emptyResult };
             }
-            const linkResults =
-              await this.linkProcessor.validatePageLinks(completeWebpage, linkOptions);
+            const linkResults = await this.linkProcessor.validatePageLinks(
+              completeWebpage,
+              linkOptions,
+            );
             return { webpageId: webpage._id, linkResults };
           }),
         ),
@@ -752,8 +881,7 @@ class SlowAnalyzerJobV2 {
           linkResults.internalBrokenLinks?.length || 0;
         this.stats.externalBrokenLinksFound +=
           linkResults.externalBrokenLinks?.length || 0;
-        this.stats.redirectLinksFound +=
-          linkResults.redirectLinks?.length || 0;
+        this.stats.redirectLinksFound += linkResults.redirectLinks?.length || 0;
       });
       if (updates.length > 0) {
         await this.bulkUpdateWebpageLinks(updates);
@@ -803,7 +931,11 @@ class SlowAnalyzerJobV2 {
   }
 
   async recalculateScoresChunk(chunk, userId, userActivityId) {
-    logger.info("calculating scores chunk", { userId, userActivityId,chunk:chunk.length });
+    logger.info("calculating scores chunk", {
+      userId,
+      userActivityId,
+      chunk: chunk.length,
+    });
     const concurrency = Math.min(config.concurrency.slow_analyzer || 8, 20);
     const limit = this.createConcurrencyLimiter(concurrency);
     const processOne = async (webpage) => {
@@ -1002,8 +1134,8 @@ class SlowAnalyzerJobV2 {
 
             logger.debug(
               `Complete webpage data loaded for ${webpage.pageUrl}. ` +
-              `Has technical: ${!!completeWebpage.technical}, ` +
-              `Has links: ${!!completeWebpage.links}`,
+                `Has technical: ${!!completeWebpage.technical}, ` +
+                `Has links: ${!!completeWebpage.links}`,
             );
 
             const linkResults =
@@ -1017,8 +1149,8 @@ class SlowAnalyzerJobV2 {
             if (hasIssues) {
               logger.warn(
                 `Found ${linkResults.internalBrokenLinks.length} internal broken, ` +
-                `${linkResults.externalBrokenLinks.length} external broken, ` +
-                `${linkResults.redirectLinks.length} redirect links on ${webpage.pageUrl}`,
+                  `${linkResults.externalBrokenLinks.length} external broken, ` +
+                  `${linkResults.redirectLinks.length} redirect links on ${webpage.pageUrl}`,
                 userId,
               );
 
@@ -1329,9 +1461,9 @@ class SlowAnalyzerJobV2 {
   async updateWebpageWithLinks(webpageId, linkResults) {
     logger.debug(
       `Updating links for ${webpageId}: ` +
-      `${linkResults.internalBrokenLinks.length} internal broken, ` +
-      `${linkResults.externalBrokenLinks.length} external broken, ` +
-      `${linkResults.redirectLinks.length} redirects`,
+        `${linkResults.internalBrokenLinks.length} internal broken, ` +
+        `${linkResults.externalBrokenLinks.length} external broken, ` +
+        `${linkResults.redirectLinks.length} redirects`,
     );
 
     try {
@@ -1365,9 +1497,9 @@ class SlowAnalyzerJobV2 {
 
       logger.info(
         `✅ Updated links for ${webpageId}: ` +
-        `${linkResults.internalBrokenLinks.length} internal broken, ` +
-        `${linkResults.externalBrokenLinks.length} external broken, ` +
-        `${linkResults.redirectLinks.length} redirects`,
+          `${linkResults.internalBrokenLinks.length} internal broken, ` +
+          `${linkResults.externalBrokenLinks.length} external broken, ` +
+          `${linkResults.redirectLinks.length} redirects`,
       );
     } catch (error) {
       logger.error(`Error updating webpage ${webpageId} with links:`, error);
