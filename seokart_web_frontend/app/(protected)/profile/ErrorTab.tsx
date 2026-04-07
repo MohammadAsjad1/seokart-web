@@ -128,7 +128,7 @@ const calculateWebpageErrors = (webpage: any): WebpageErrorCounts => {
     metaErrors++;
   }
 
-  if (webpage.content?.wordCount && webpage.content.wordCount < 200) {
+  if (webpage.content?.wordCount && webpage.content.wordCount < 300) {
     contentErrors++;
   }
 

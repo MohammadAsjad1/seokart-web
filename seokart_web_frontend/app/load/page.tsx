@@ -6,20 +6,23 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { completeSetup, loadUser } from "@/store/slices/authSlice";
 import { setChannels, setSelectedChannel } from "@/store/slices/channelSlice";
+import axiosInstance from "@/lib/axios";
+import { showToast } from "@/lib/toast";
 
 function LoadPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const dispatch = useAppDispatch();
   const [error, setError] = useState("");
-
+ 
   useEffect(() => {
     const verifyAndRedirect = async () => {
       const signedPayload = searchParams.get("signed_payload_jwt");
       if (!signedPayload) {
-        setError("Missing signed payload");
+        setError("Missing authentication information. Please access the app via your BigCommerce Apps panel or refresh the page.");
         return;
       }
+
       const result = await dispatch(loadUser(signedPayload)).unwrap();
       if (result.user) {
         const { user, token, sessionExpiresAt, channels } = result;
@@ -32,18 +35,19 @@ function LoadPageContent() {
         localStorage.setItem("token", token);
         
         if (channels && channels.length > 0) {
-          localStorage.setItem("channels", JSON.stringify(channels));
-          localStorage.setItem("selectedChannel", JSON.stringify(channels[0]));
           dispatch(setChannels(channels));
-          dispatch(setSelectedChannel(channels[0]));
+          dispatch(setSelectedChannel(channels?.[0]));
         }else{
           dispatch(setChannels([]));
           dispatch(setSelectedChannel(null as any));
+          syncChannels(user.store_hash);
         }
         // router.replace(user.needsSetup ? `/select-plan` : `/dashboard`);
+        
+        // Complete setup
         try {
           if (user.needsSetup) {
-            await dispatch(
+            dispatch(
               completeSetup({
                 plan: "free",
                 domain: user.primaryDomain || "",
@@ -64,6 +68,24 @@ function LoadPageContent() {
     };
     verifyAndRedirect();
   }, [searchParams]);
+
+  const syncChannels = async (storeHash: string) => {
+    try {
+      const response = await axiosInstance.get(
+       `/load/channels/create-and-sync-channels?storeHash=${storeHash}`,
+     );
+     const primaryChannel = response.data.data;
+     if (primaryChannel) {
+      dispatch(setSelectedChannel(primaryChannel));
+      dispatch(setChannels([primaryChannel]));
+    } else {
+      dispatch(setChannels([]));
+      dispatch(setSelectedChannel(null as any));
+     }
+   } catch (error) {
+     showToast("Failed to sync channels", "error");
+   }
+  }
 
   if (error) {
     return (

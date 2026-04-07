@@ -72,7 +72,7 @@ export default function AccordionContent({
   currentPageRef.current = currentPage;
   // If we manually trigger a fetch after scrape, we may also trigger the
   // `currentPage` effect. This flag lets us skip that one redundant call.
-  const skipNextPageEffectFetchRef = useRef(false);
+  // const skipNextPageEffectFetchRef = useRef(false);
   const [initialized, setInitialized] = useState(false);
   const [activeTab, setActiveTab] = useState("webpages");
   const [errorCounts, setErrorCounts] = useState<any>(null);
@@ -172,10 +172,10 @@ export default function AccordionContent({
 
         if(response){
           showToast("Webpage recrawled successfully", "success");
-          const willChangePage = currentPageRef.current !== 1;
-          currentPageRef.current = 1;
-          skipNextPageEffectFetchRef.current = willChangePage;
-          setCurrentPage(1);
+          // const willChangePage = currentPageRef.current !== 1;
+          // currentPageRef.current = 1;
+          // skipNextPageEffectFetchRef.current = willChangePage;
+          // setCurrentPage(1);
           // Manually refetch to ensure data updates even if we're already on page 1.
           fetchWebpagesWithFilters();
         }
@@ -243,10 +243,10 @@ export default function AccordionContent({
   // Refetch when page or sort changes only (initialized not in deps to avoid double call when Effect 1 sets it)
   useEffect(() => {
     if (initialized && activityId && activeTab === "webpages") {
-      if (skipNextPageEffectFetchRef.current) {
-        skipNextPageEffectFetchRef.current = false;
-        return;
-      }
+      // if (skipNextPageEffectFetchRef.current) {
+      //   skipNextPageEffectFetchRef.current = false;
+      //   return;
+      // }
       fetchWebpagesWithFilters();
     }
   }, [currentPage, sortValue, activityId, activeTab]);

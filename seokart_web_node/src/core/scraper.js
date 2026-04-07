@@ -242,6 +242,13 @@ class WebScraper {
 
     let lastError = null;
 
+    const proxyUrl = process.env.PROXY_URL;
+    if (!proxyUrl) {
+      throw new Error("PROXY_URL is not set");
+    }
+
+    const agent = new HttpsProxyAgent(proxyUrl);
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (this.shouldStop) {
         throw new Error("Scraping stopped by user");
@@ -255,13 +262,15 @@ class WebScraper {
         logger.info(`🔁 Retry attempt ${attempt}/${maxRetries} for ${url}`);
       }
 
-      const { proxy, agent, proxyIndex, userAgent } =
-        this.rotationHandler.getNextProxy(attempt > 0);
+      // const { proxy, agent, proxyIndex, userAgent } =
+      //   this.rotationHandler.getNextProxy(attempt > 0);
+
+      const userAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
       try {
         logger.info(
-          `🌐 Request #${this.stats.requests_made} to ${url} via proxy ${proxyIndex + 1
-          }`
+          `🌐 Request #${this.stats.requests_made} to ${url} via rotating proxy`
         );
 
         // const proxyAgent = new HttpsProxyAgent(proxy);
@@ -271,22 +280,17 @@ class WebScraper {
           responseType: "text",
           validateStatus: (status) => status < 500,
           maxContentLength: 10 * 1024 * 1024,
+        
           httpsAgent: agent,
           httpAgent: agent,
-          proxy: false,
+          proxy: false, // VERY IMPORTANT
+        
           headers: {
             "User-Agent": userAgent,
             Accept:
-              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            // "Accept-Encoding": "gzip, deflate, br",
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Encoding": "gzip, deflate",
-            Connection: "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            DNT: "1",
+             Connection: "keep-alive"
           },
         });
         if (response.status === 403 || response.status === 429) {
@@ -302,11 +306,10 @@ class WebScraper {
         const responseTime = Date.now() - startTime;
         this.stats.successful_requests++;
         this.stats.consecutive_failures = 0;
-        this.rotationHandler.recordSuccess(proxyIndex);
+        // this.rotationHandler.recordSuccess(proxyIndex);
 
         logger.info(
-          `✅ Success! Response time: ${responseTime}ms url: ${url} via [proxy-${proxyIndex + 1
-          }]`
+          `✅ Success! Response time: ${responseTime}ms url: ${url} via rotating proxy`
         );
 
         const scraped_data = this.parseHtmlContent(
@@ -316,7 +319,7 @@ class WebScraper {
         );
         scraped_data.response_time = responseTime;
         scraped_data.scraping_method = "nodejs_axios_proxy";
-        scraped_data.proxy_used = proxyIndex + 1;
+        scraped_data.proxy_used = "rotating";
         scraped_data.attempt_number = attempt + 1;
         // scraped_data.rawHtml = response.data;
 
@@ -326,35 +329,39 @@ class WebScraper {
         const responseTime = Date.now() - startTime;
         lastError = err;
 
+        if (err.response?.status === 403 || err.response?.status === 429) {
+          logger.warn("⚠️ Likely blocked, retrying...");
+        }
+
         this.stats.consecutive_failures++;
-        this.rotationHandler.recordFailure(proxyIndex);
+        // this.rotationHandler.recordFailure(proxyIndex);
+
+        const isRetryable =
+        err.code === "ECONNRESET" ||
+        err.code === "ETIMEDOUT" ||
+        err.code === "ECONNREFUSED" ||
+        err.response?.status === 403 ||
+        err.response?.status === 429;
+
+        if (isRetryable) {
+          logger.warn(`⚠️ Retryable error: ${err.message}`);
+        }
 
         // const isBlocked =
-        //   err.message.includes("403") ||
-        //   err.message.includes("429") ||
-        //   err.message.includes("ECONNREFUSED") ||
-        //   err.message.includes("ETIMEDOUT");
-        const isBlocked =
-          err.code === "ECONNREFUSED" ||
-          err.code === "ETIMEDOUT" ||
-          err.response?.status === 403 ||
-          err.response?.status === 429;
+        //   err.code === "ECONNREFUSED" ||
+        //   err.code === "ETIMEDOUT" ||
+        //   err.response?.status === 403 ||
+        //   err.response?.status === 429;
 
-        if (isBlocked) {
-          // console.error(
-          //   `❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`
-          // );
-          logger.error(`❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`);
-          // this.rotationHandler.markProxyAsBlocked(proxyIndex);
-          if (this.rotationHandler.proxyStats.get(proxyIndex).failed > 10 && this.rotationHandler.proxyStats.get(proxyIndex).successful === 0) {
-            this.markProxyAsBlocked(proxyIndex);
-          }
-        } else {
-          // console.error(
-          //   `❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`
-          // );
-          logger.error(`❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`);
-        }
+        // if (isBlocked) {
+        //   logger.error(`❌ Proxy ${proxyIndex + 1} likely blocked: ${err.message}`);
+        //   // this.rotationHandler.markProxyAsBlocked(proxyIndex);
+        //   if (this.rotationHandler.proxyStats.get(proxyIndex).failed > 10 && this.rotationHandler.proxyStats.get(proxyIndex).successful === 0) {
+        //     this.markProxyAsBlocked(proxyIndex);
+        //   }
+        // } else {
+        //   logger.error(`❌ Request failed via proxy ${proxyIndex + 1}: ${err.message}`);
+        // }
 
         if (this.stats.consecutive_failures >= this.MAX_CONSECUTIVE_FAILURES) {
           logger.error(
@@ -594,6 +601,7 @@ class WebScraper {
         totalCount > 0
           ? (((totalCount - withAlt) / totalCount) * 100).toFixed(1)
           : 0,
+      altMissingCount: Math.max(0, totalCount - withAlt),
     };
   }
 

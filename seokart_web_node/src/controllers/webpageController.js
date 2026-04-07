@@ -707,7 +707,7 @@ async function getContentIssuesCounts(baseQuery) {
   return [
     {
       id: "content_too_short",
-      title: "Content Length is Sufficient (More Than 200 Words)",
+      title: "Content Length is Sufficient (More Than 300 Words)",
       count: data.contentTooShort || 0,
       type: "content",
     },

@@ -4,8 +4,6 @@ const crypto = require("crypto");
 const {
   installApp,
   uninstallApp,
-  getChannelsList,
-  getFirstChannel,
 } = require("../controllers/storeController");
 const { auth } = require("../middleware/authMiddleware");
 
@@ -35,8 +33,5 @@ function verifyWebhook(req, res, next) {
 router.get("/install", installApp);
 
 router.get("/uninstall", uninstallApp);
-
-router.get("/channels/:storeHash", auth, getChannelsList);
-router.get("/channels/:storeHash/first", auth, getFirstChannel);
 
 module.exports = router;

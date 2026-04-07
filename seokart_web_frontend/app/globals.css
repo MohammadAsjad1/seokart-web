@@ -174,9 +174,9 @@ body {
   height: calc(100% - 16px);
 }
 
-/* .optimize-drawer::after {
+.optimize-drawer::after {
   content: initial !important;
-} */
+}
 
 .paginationBox nav ul li a[aria-current="page"] {
   background: #303030;

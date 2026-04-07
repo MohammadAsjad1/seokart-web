@@ -2,7 +2,8 @@ const DuplicateProcessor = require("../processors/duplicate-processor");
 const DuplicateProcessorV2 = require("../processors/duplicate-processor-v2");
 const LinkProcessor = require("../processors/link-processor");
 const ScoreCalculator = require("../processors/score-calculator");
-const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+// const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+const GrammarSpellCheckerV2 = require("../processors/grammer-spell-checkerV2");
 const WebpageService = require("../services/webpage-service");
 const ActivityService = require("../services/activity-service");
 const config = require("../config/scraper");
@@ -23,7 +24,7 @@ class SlowAnalyzerJobV2 {
     this.duplicateProcessorV2 = new DuplicateProcessorV2({ redis: this.redis });
     this.linkProcessor = new LinkProcessor({ redis: this.redis });
     this.scoreCalculator = new ScoreCalculator();
-    this.grammarChecker = new GrammarSpellChecker();
+    this.grammarChecker = new GrammarSpellCheckerV2();
     this.webpageService = new WebpageService();
     this.activityService = new ActivityService();
 

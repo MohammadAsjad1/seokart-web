@@ -2,6 +2,8 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Channel = require("../models/channel-model");
+const { createAndSyncChannelsWithSites, getChannelsList, getFirstChannel } = require("../controllers/loadController");
+const { auth } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -10,7 +12,7 @@ router.get("/", async (req, res) => {
     const signed = req.query.signed_payload_jwt;
    
 
-    if (!signed) return res.status(400).json({ success: false });
+    if (!signed) return res.status(400).json({ success: false, message: "Signed payload is missing" });
 
     const payload = jwt.verify(signed, process.env.BIG_COMMERCE_CLIENT_SECRET, {
       algorithms: ["HS256"],
@@ -67,12 +69,17 @@ router.get("/", async (req, res) => {
         user: { ...user.toObject(), needsSetup: user.needsSetup() },
         token,
         sessionExpiresAt,
-        channels: [primaryChannel],
+        channels: primaryChannel ? [primaryChannel] : [],
       },
     });
   } catch(err) {
     res.status(401).json({ success: false });
   }
 });
+
+router.get("/channels/create-and-sync-channels", auth, createAndSyncChannelsWithSites);
+router.get("/channels/:storeHash", auth, getChannelsList);
+router.get("/channels/:storeHash/first", auth, getFirstChannel);
+
 
 module.exports = router;

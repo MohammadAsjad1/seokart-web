@@ -36,7 +36,7 @@ module.exports = async function (job) {
     await connect();
     await initEmitter();
     initialized = true;
-    logger.info("Crawl V2 Phase2 worker initialized");
+    logger.info(`Crawl V2 Phase2 worker initialized for ${job.data.websiteUrl} `);
   }
 
   const { activityId, userId, websiteUrl } = job.data;
@@ -44,7 +44,7 @@ module.exports = async function (job) {
     throw new Error("Crawl V2 Phase2 job missing required data: activityId, userId, websiteUrl");
   }
 
-  logger.info(`Crawl V2 Phase2 job ${job.id} starting for activity ${activityId}`, userId);
+  logger.info(`Crawl V2 Phase2 job ${job.id} starting for activity ${activityId} ${websiteUrl}`, userId);
 
   const redis = getRedis();
   const slowAnalyzerJob = new SlowAnalyzerJobV2({ redis });

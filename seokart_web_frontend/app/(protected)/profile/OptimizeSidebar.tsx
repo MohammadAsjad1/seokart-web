@@ -188,7 +188,13 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
   };
 
   return (
-    <DrawerContent className="optimize-drawer bg-[#fff] w-[650px] right-2 left-initial m-0 fixed top-2 rounded-2xl">
+    <DrawerContent
+      className="optimize-drawer bg-white w-[650px] right-2 left-initial m-0 fixed top-2 rounded-2xl"
+      style={{
+        transform: "translateZ(0)",
+        backfaceVisibility: "hidden",
+      }}
+    >
       <div className="w-full">
         <div className="drawer-head flex justify-between items-center gap-3 bg-[#F3F3F3] py-4 px-5 rounded-t-2xl">
           <DrawerHeader className="p-0">

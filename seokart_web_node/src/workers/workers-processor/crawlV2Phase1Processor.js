@@ -95,14 +95,35 @@ module.exports = async function (job) {
   const maxUrls = crawlV2Config.maxPagesPerCrawl;
   const sitemapService = new SitemapService();
 
-  const sitemapResult = await sitemapService.processSitemapsAndSaveUrls(
-    finalSitemapUrls.slice(0, crawlV2Config.maxSitemapUrls),
-    activityId,
-    userId,
-    { maxUrls },
-  );
+  let sitemapResult = null;
+ try {
+   sitemapResult = await sitemapService.processSitemapsAndSaveUrls(
+     finalSitemapUrls.slice(0, crawlV2Config.maxSitemapUrls),
+     activityId,
+     userId,
+     { maxUrls },
+   );
+ } catch (error) {
+    console.error(`❌ Crawl V2 Phase1 job ${job.id} failed in processor`, error);
+    await UserActivity.findByIdAndUpdate(activityId, {
+      status: "failed",
+      isSitemapCrawling: 0,
+      isWebpageCrawling: 0,
+      endTime: new Date(),
+      errorMessages: [error?.message || String(error)],
+      lastUpdated: new Date(),
+      lastHeartbeat: new Date(),
+    });
+    emitToUser(userId, "crawl_error", {
+      websiteUrl: cleanUrl,
+      message: error?.message || String(error),
+      activityId,
+      timestamp: new Date().toISOString(),
+    });
+   throw error;
+ }
 
-  const allUrls = sitemapResult.extractedUrls;
+  const allUrls = sitemapResult?.extractedUrls || [];
   if (!allUrls || allUrls.length === 0) {
     await UserActivity.findByIdAndUpdate(activityId, {
       status: "failed",

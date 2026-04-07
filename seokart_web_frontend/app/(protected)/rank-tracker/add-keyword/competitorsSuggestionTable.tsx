@@ -99,7 +99,9 @@ const CompetitorsSuggestionTable: React.FC<CompetitorsSuggestionTableProps> = ({
                 >
                   <td className="px-4 py-1 text-sm text-gray-900 border-b border-gray-100">
                     <div className="flex items-center gap-2">
-                      <Globe className="w-4 h-4 text-blue-500" />
+                      <span style={{ width: '16px', height: '16px', minWidth: '16px', minHeight: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Globe className="w-4 h-4 text-blue-500" style={{ width: '16px', height: '16px', minWidth: '16px', minHeight: '16px' }} />
+                      </span>
                       <div>
                         <div className="font-medium">
                           {item.competitorDomain}

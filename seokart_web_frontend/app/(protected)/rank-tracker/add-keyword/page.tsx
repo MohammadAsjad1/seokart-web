@@ -630,7 +630,7 @@ export default function AddKeyword() {
               </div>
             </div>
 
-            <div className="page-headRight flex gap-4">
+            {/* <div className="page-headRight flex gap-4"> */}
               {/* <Link
                 href="/"
                 className="bg-gray-50 border border-slate-200 w-[46px] h-[38px] flex rounded-lg justify-center"
@@ -643,7 +643,7 @@ export default function AddKeyword() {
                 />
               </Link> */}
 
-              <Link
+              {/* <Link
                 href="/"
                 className="bg-white border border-slate-200 w-[46px] h-[38px] flex rounded-lg justify-center"
               >
@@ -653,8 +653,8 @@ export default function AddKeyword() {
                   width="16"
                   height="14"
                 />
-              </Link>
-            </div>
+              </Link> */}
+            {/* </div> */}
           </div>
 
           <div className="add-keywordArea">
