@@ -16,7 +16,8 @@ const {
 const crashRecoveryService = require("../services/crash-recovery-service");
 const WebScraper = require("../core/scraper");
 const ScoreCalculator = require("../processors/score-calculator");
-const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+// const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+const GrammarSpellChecker = require("../processors/grammer-spell-checkerV2");
 const DuplicateProcessor = require("../processors/duplicate-processor");
 const LinkProcessor = require("../processors/link-processor");
 const { UserPlan } = require("../models/userPlan");

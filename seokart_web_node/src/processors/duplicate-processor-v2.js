@@ -176,9 +176,9 @@ class DuplicateProcessorV2 {
   // ─── Public API ─────────────────────────────────────────────────────────────
 
   /**
-   * Incremental duplicate detection (single pass).
-   * Use this only when you want streaming/live results.
-   * For batch SEO scoring, prefer runTwoPassAnalysis().
+   * Duplicate comparison pass (read-only against existing signature store).
+   * This method does not mutate Redis/in-memory store.
+   * Build store first with _buildStoreOnly() and then call this for scoring.
    *
    * @param {Array}  batch          - Array of page objects
    * @param {Object} signatureStore - carry-over store from previous chunk (or null)
@@ -216,29 +216,14 @@ class DuplicateProcessorV2 {
             ? this.normalizeDescription(page.metaDescription)
             : "";
 
-        let titleExisting = [],
-          titleCount = 0,
-          titleNormExists = false;
-        let descExisting = [],
-          descCount = 0,
-          descNormExists = false;
-        const pageWriteCmds = [];
+        let titleExisting = [];
+        let descExisting = [];
 
         if (redis) {
-          const readCmds = [
-            { cmd: "sCard", args: [prefix + "title_norms"] },
-            { cmd: "sCard", args: [prefix + "description_norms"] },
-          ];
-          let titleExistsIdx = -1;
-          let descExistsIdx = -1;
+          const readCmds = [];
           let titleMembersIdx = -1;
           let descMembersIdx = -1;
           if (titleNorm) {
-            titleExistsIdx =
-              readCmds.push({
-                cmd: "sIsMember",
-                args: [prefix + "title_norms", titleNorm],
-              }) - 1;
             titleMembersIdx =
               readCmds.push({
                 cmd: "sRandMember",
@@ -246,11 +231,6 @@ class DuplicateProcessorV2 {
               }) - 1;
           }
           if (descNorm) {
-            descExistsIdx =
-              readCmds.push({
-                cmd: "sIsMember",
-                args: [prefix + "description_norms", descNorm],
-              }) - 1;
             descMembersIdx =
               readCmds.push({
                 cmd: "sRandMember",
@@ -258,13 +238,6 @@ class DuplicateProcessorV2 {
               }) - 1;
           }
           const readResults = await this._execPipeline(store, readCmds);
-
-          titleCount = Number(readResults[0] || 0);
-          descCount = Number(readResults[1] || 0);
-          if (titleExistsIdx !== -1)
-            titleNormExists = Number(readResults[titleExistsIdx] || 0) === 1;
-          if (descExistsIdx !== -1)
-            descNormExists = Number(readResults[descExistsIdx] || 0) === 1;
 
           const titleMembers =
             titleMembersIdx === -1 ? [] : readResults[titleMembersIdx];
@@ -292,9 +265,7 @@ class DuplicateProcessorV2 {
           }
         } else {
           if (titleNorm) titleExisting = store.titles.get(titleNorm) || [];
-          titleCount = store.titles.size;
           if (descNorm) descExisting = store.descriptions.get(descNorm) || [];
-          descCount = store.descriptions.size;
         }
 
         // --- 1. Title Match ---
@@ -311,44 +282,6 @@ class DuplicateProcessorV2 {
             }));
             this.stats.titleDuplicatesFound +=
               duplicates.titleDuplicates.length;
-          }
-          const canStoreTitle = !redis
-            ? titleCount < STORE_MAX_TITLES
-            : titleNormExists || titleCount < STORE_MAX_TITLES;
-          if (canStoreTitle) {
-            titleExisting.push({
-              _id: idStr,
-              pageUrl: page.pageUrl,
-              title: page.title || "",
-            });
-            if (!redis) store.titles.set(titleNorm, titleExisting);
-            else {
-              if (!titleNormExists) {
-                pageWriteCmds.push({
-                  cmd: "sAdd",
-                  args: [prefix + "title_norms", titleNorm],
-                });
-              }
-              pageWriteCmds.push({
-                cmd: "sAdd",
-                args: [
-                  prefix + "t:" + titleNorm,
-                  JSON.stringify({
-                    _id: idStr,
-                    pageUrl: page.pageUrl,
-                    title: page.title || "",
-                  }),
-                ],
-              });
-              pageWriteCmds.push({
-                cmd: "expire",
-                args: [prefix + "title_norms", REDIS_TTL_SECONDS],
-              });
-              pageWriteCmds.push({
-                cmd: "expire",
-                args: [prefix + "t:" + titleNorm, REDIS_TTL_SECONDS],
-              });
-            }
           }
         }
 
@@ -367,48 +300,9 @@ class DuplicateProcessorV2 {
             this.stats.descriptionDuplicatesFound +=
               duplicates.descriptionDuplicates.length;
           }
-          const canStoreDesc = !redis
-            ? descCount < STORE_MAX_DESCRIPTIONS
-            : descNormExists || descCount < STORE_MAX_DESCRIPTIONS;
-          if (canStoreDesc) {
-            descExisting.push({
-              _id: idStr,
-              pageUrl: page.pageUrl,
-              metaDescription: page.metaDescription || "",
-            });
-            if (!redis) store.descriptions.set(descNorm, descExisting);
-            else {
-              if (!descNormExists) {
-                pageWriteCmds.push({
-                  cmd: "sAdd",
-                  args: [prefix + "description_norms", descNorm],
-                });
-              }
-              pageWriteCmds.push({
-                cmd: "sAdd",
-                args: [
-                  prefix + "d:" + descNorm,
-                  JSON.stringify({
-                    _id: idStr,
-                    pageUrl: page.pageUrl,
-                    metaDescription: page.metaDescription || "",
-                  }),
-                ],
-              });
-              pageWriteCmds.push({
-                cmd: "expire",
-                args: [prefix + "description_norms", REDIS_TTL_SECONDS],
-              });
-              pageWriteCmds.push({
-                cmd: "expire",
-                args: [prefix + "d:" + descNorm, REDIS_TTL_SECONDS],
-              });
-            }
-          }
         }
 
         // --- 3. Content SimHash (4-Band Logic) ---
-        let bucketCount = redis ? null : store.totalBucketEntries;
         let contentBucketMembers = null;
 
         if (page.content?.trim().length > 100) {
@@ -421,7 +315,6 @@ class DuplicateProcessorV2 {
 
             if (redis) {
               const contentReadCmds = [
-                { cmd: "get", args: [prefix + "bucket_count"] },
                 ...bucketKeys.map((key) => ({
                   cmd: "sRandMember",
                   args: [prefix + "b:" + key, CONTENT_BUCKET_SAMPLE_SIZE],
@@ -431,9 +324,7 @@ class DuplicateProcessorV2 {
                 store,
                 contentReadCmds,
               );
-              bucketCount = parseInt(contentReadResults[0] || "0", 10);
-              // SLICE FIX: Take 1 (count) + 4 (keys) = indices 1 to 4
-              contentBucketMembers = contentReadResults.slice(1, 1 + BANDS);
+              contentBucketMembers = contentReadResults.slice(0, BANDS);
             }
 
             const seenIds = new Set();
@@ -473,55 +364,7 @@ class DuplicateProcessorV2 {
                 }
               }
             }
-
-            // Save new entry if under limit
-            if ((bucketCount || 0) < STORE_MAX_BUCKET_ENTRIES) {
-              const entryPayload = JSON.stringify({
-                simhash: simhash.toString(),
-                _id: idStr,
-                pageUrl: page.pageUrl,
-                wordCount: page.wordCount || 0,
-              });
-              if (redis) {
-                for (const key of bucketKeys) {
-                  pageWriteCmds.push({
-                    cmd: "sAdd",
-                    args: [prefix + "b:" + key, entryPayload],
-                  });
-                  pageWriteCmds.push({
-                    cmd: "expire",
-                    args: [prefix + "b:" + key, REDIS_TTL_SECONDS],
-                  });
-                }
-                pageWriteCmds.push({
-                  cmd: "incrBy",
-                  args: [prefix + "bucket_count", BANDS],
-                });
-                pageWriteCmds.push({
-                  cmd: "expire",
-                  args: [prefix + "bucket_count", REDIS_TTL_SECONDS],
-                });
-              } else {
-                for (const key of bucketKeys) {
-                  let b = store.contentSimhashBuckets.get(key) || [];
-                  b.push({
-                    simhash,
-                    _id: idStr,
-                    pageUrl: page.pageUrl,
-                    wordCount: page.wordCount || 0,
-                  });
-                  store.contentSimhashBuckets.set(key, b);
-                  store.totalBucketEntries++;
-                }
-              }
-            }
           }
-        }
-
-        // --- Finalize Redis Writes ---
-        if (redis) {
-          if (pageWriteCmds.length)
-            await this._execPipeline(store, pageWriteCmds);
         }
 
         this.stats.webpagesAnalyzed++;

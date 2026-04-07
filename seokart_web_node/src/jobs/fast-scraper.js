@@ -1,6 +1,7 @@
 const WebScraper = require("../core/scraper");
 const ScoreCalculator = require("../processors/score-calculator");
-const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+// const GrammarSpellChecker = require("../processors/grammar-spell-checker");
+const GrammarSpellChecker = require("../processors/grammer-spell-checkerV2");
 const WebpageService = require("../services/webpage-service");
 const ActivityService = require("../services/activity-service");
 const config = require("../config/scraper");
