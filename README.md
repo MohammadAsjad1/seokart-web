@@ -1138,4 +1138,9 @@ After login, connect to Socket.IO with the same token; you’ll receive live cra
 
 ---
 
+## How to run BACKEND
+- npm run dev ->  to start development server start
+- npm run worker:crawl-v2-phase1 -> to start 1st worker (scrape) backgroung job
+- npm run worker:crawl-v2-phase2 -> to start 2nd worker (analyse) background job
+
 *For environment variables (MongoDB, JWT, Google OAuth, DataForSEO, etc.), check `node-backend/.env.example` or project docs.*

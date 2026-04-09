@@ -57,7 +57,7 @@ const userPlanSchema = new mongoose.Schema({
   rankTracker: {
     plan: {
       type: String,
-      enum: ['free', 'basic', 'pro', 'enterprise'],
+      enum: ['free', 'basic', 'premium', 'enterprise'],
       default: 'free'
     },
     limits: {
@@ -84,7 +84,7 @@ const userPlanSchema = new mongoose.Schema({
   webCrawler: {
     plan: {
       type: String,
-      enum: ['free', 'basic', 'pro', 'enterprise'],
+      enum: ['free', 'basic', 'premium', 'enterprise'],
       default: 'free'
     },
     limits: {
@@ -304,7 +304,7 @@ userPlanSchema.methods.changePlan = function(service, newPlan) {
     rankTracker: {
       free: {
         domains: 1,
-        keywords: 3,
+        keywords: 10,
         competitors: 3,
         updateFrequency: 'monthly',
         aiTracking: false,

@@ -153,12 +153,12 @@ class SpellingChecker {
     }
   }
 
-  // ✅ NEW: Combined correctness check
+  // Combined correctness check
   isCorrect(word) {
     return this.dictionaryUS.correct(word) || this.dictionaryGB.correct(word);
   }
 
-  // ✅ NEW: Merge suggestions
+  // Merge suggestions
   getSuggestions(word) {
     const us = this.dictionaryUS.suggest(word) || [];
     const gb = this.dictionaryGB.suggest(word) || [];
@@ -166,7 +166,7 @@ class SpellingChecker {
     return [...new Set([...us, ...gb])].slice(0, 3);
   }
 
-  // ✅ NEW: Smart filtering (VERY IMPORTANT)
+  // Smart filtering
   shouldSkipWord(word) {
     const lower = word.toLowerCase();
 
@@ -321,7 +321,7 @@ class SpellingChecker {
       const wordLower = cleanWord.toLowerCase();
       if (reportedWords.has(wordLower)) continue;
 
-      const isCorrect = this.isCorrect(wordLower);
+      const isCorrect = this.isCorrect(wordLower) || this.isCorrect(cleanWord);
 
       if (!isCorrect) {
         const suggestions = this.getSuggestions(wordLower);
@@ -344,7 +344,6 @@ class SpellingChecker {
     return errors;
   }
 
-  // ---- EVERYTHING BELOW UNCHANGED ----
 
   cleanWordPreservingContractions(word) {
     let cleaned = word.replace(/[^\w']/g, "");

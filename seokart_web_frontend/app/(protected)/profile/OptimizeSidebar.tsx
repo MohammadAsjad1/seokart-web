@@ -147,10 +147,9 @@ const AccordionItem = ({
       </div>
       {hasError && (
         <div
-          className="overflow-hidden transition-all duration-300 ease-in-out"
+          className="overflow-hidden transition-[max-height] duration-300 ease-in-out"
           style={{
             maxHeight: isOpen ? "500px" : "0",
-            opacity: isOpen ? 1 : 0,
           }}
         >
           <div className="mt-3 ml-6 p-4 bg-red-50 rounded-lg border border-red-200 max-w-[550px]">
@@ -189,11 +188,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
 
   return (
     <DrawerContent
-      className="optimize-drawer bg-white w-[650px] right-2 left-initial m-0 fixed top-2 rounded-2xl"
-      style={{
-        transform: "translateZ(0)",
-        backfaceVisibility: "hidden",
-      }}
+      className="optimize-drawer bg-white w-[650px] right-2 left-initial m-0 fixed top-2 rounded-2xl antialiased [text-rendering:optimizeLegibility]"
     >
       <div className="w-full">
         <div className="drawer-head flex justify-between items-center gap-3 bg-[#F3F3F3] py-4 px-5 rounded-t-2xl">
@@ -240,7 +235,7 @@ export default function OptimizeSidebar({ webpage, isOpen }: Props) {
             <Loader2 className="animate-spin" size={30} />
           </div>
         ) : (
-          <ScrollArea className="technical-drawerErrors h-[calc(100vh-100px)]">
+          <ScrollArea className="technical-drawerErrors h-[calc(100vh-100px)] antialiased [text-rendering:optimizeLegibility]">
             {/* Meta Tag Issues */}
             <div className="drawer-errorBox p-5 border-b border-[#DEE2E6]">
               <h3 className="text-lg font-semibold">Meta Tag Issues</h3>

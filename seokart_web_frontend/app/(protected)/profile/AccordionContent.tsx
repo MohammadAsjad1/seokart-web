@@ -676,6 +676,7 @@ export default function AccordionContent({
         open={isDrawerOpen}
         onOpenChange={setIsDrawerOpen}
         direction="right"
+        shouldScaleBackground={false}
       >
         {selectedWebpage && (
           <OptimizeSidebar webpage={selectedWebpage} isOpen={isDrawerOpen} />

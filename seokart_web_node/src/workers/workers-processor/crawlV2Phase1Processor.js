@@ -59,9 +59,9 @@ module.exports = async function (job) {
   if (cleanUrl.includes("://www."))
     cleanUrl = cleanUrl.replace("://www.", "://");
 
-  if (!scraperService.initialized) {
-    await scraperService.initialize();
-  }
+  // if (!scraperService.initialized) {
+  //   await scraperService.initialize();
+  // }
 
   // Resolve sitemap URLs if not provided
   if (finalSitemapUrls.length === 0) {

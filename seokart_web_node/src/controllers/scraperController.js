@@ -527,6 +527,10 @@ const handleSitemapCrawlV2 = async (req, res) => {
       }
     }
 
+    if(scraperService.initialized) {
+      await scraperService.initialize();
+    }
+
     let userActivity;
     if (existingActivity) {
       // Reuse: update existing activity for this recrawl
